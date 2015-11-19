@@ -280,7 +280,8 @@ let asm_eq func asm_bloc x y dest = general_comp "je"
 
 (******** Conditions ternaires : EIF(e1,e2,e3) est e1?e2:e3 *********)
 
-let asm_eif func asm_bloc x y = 
+let asm_eif func asm_bloc x y =
+  
 
 
 (* ==================== *)
@@ -709,6 +710,7 @@ let asm_block_of_expr func expr env func_env asm_bloc =
       (* Ajoute adresse temporaire pour le resultat *)
       let new_env = env#add asm_bloc "" in
       let result_addr = new_env#get "" in
+      (* asm_eif func asm_bloc  *)
       (* TODO *)
     end
   | ESEQ l_expr ->
@@ -727,30 +729,47 @@ let asm_block_of_expr func expr env func_env asm_bloc =
           asm_block_of_expr func (ESEQ r) env1 func_env asm_bloc
         end
     end
-(* (env, func_env) *)
-let asm_block_of_code code env func_env asm_bloc =
+
+
+
+
+
+(*
+func is "" if we are not in a function, else it contains the name of
+the function
+(env, func_env) *)
+let asm_block_of_code func code env func_env asm_bloc =
   (* Declaration of variables/function.
      It returns a new env, func_env, and the asm_bloc is modified. *)
   let asm_block_of_var_declaration var_decl env func_env asm_bloc =
     match var_decl with
-      CDECL (loc, var_name) -> env#add asm_bloc var_name
+      CDECL (loc, var_name) ->
+      begin
+        (* TODO : deal with local functions ? *)
+        env#add asm_bloc var_name
+      end
     | CFUN (loc, func_name, var_decl_l, (next_loc, code)) ->
-      (* Create a new label for the function *)
-      let lbl = genlab func_name in
-      (* Add it in the list of functions *)
-      next_func_env = func_env#addf func_name (Global genlab);
-      (* TODO : do the declaration of the function variables *)
-      
-      (* Create the content of the bloc *)
-      let new_asm = new asm_bloc lbl [] [] [] in
-      try
-        (* Eval the inside of the function *)
-        let (env,last_func_env) =
-          asm_block_of_code code end_env func_env new_asm in
-        (* Add it to the main asm block *)
-        asm_bloc#add_block new_asm;
-        (env,last_func_env)
-      with Uncomplete_compilation_error er -> compile_raise next_loc er
+      if func <> "" then
+        compile_raise loc ("The function %s want to be declared inside the function %s... Pretty strange !" func_name func)
+      else
+        begin
+          (* Create a new label for the function *)
+          let lbl = genlab func_name in
+          (* Add it in the list of functions *)
+          next_func_env = func_env#addf func_name (Global genlab);
+          (* TODO : do the declaration of the function variables *)
+          (* TODO : correct everything *)
+          (* Create the content of the bloc *)
+          let new_asm = new asm_bloc lbl [] [] [] in
+          try
+            (* Eval the inside of the function *)
+            let (env,last_func_env) =
+              asm_block_of_code func code end_env func_env new_asm in
+            (* Add it to the main asm block *)
+            asm_bloc#add_block new_asm;
+            (env,last_func_env)
+          with Uncomplete_compilation_error er -> compile_raise next_loc er
+        end
   in    
 
 
@@ -765,8 +784,12 @@ let asm_block_of_code code env func_env asm_bloc =
           (env3, func_env3)
         ) (env, func_env) var_decl_l
     end
-  | CEXPR (loc,expr) -> (** une expression e; vue comme instruction. *)
-    
+  | CEXPR (loc,expr) ->
+    begin
+      (** une expression e; vue comme instruction. *)
+      let (env2, _) = asm_block_of_expr func expr env func_env asm_bloc in
+      (env2, func_env)
+    end
   | CIF of loc_expr * loc_code * loc_code (** if (e) c1; else c2; *)
   | CWHILE ((loc_e, expr), (loc_c, code2)) -> (** while (e) c1; *)
     asm_block_of_code
