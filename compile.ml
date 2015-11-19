@@ -75,11 +75,17 @@ let mv_into_array src index dest =
    (sp "movq (%%r13, %%r14, 8), %%r14","");
    (sp "movq %%r14, %s" dest_s, "")]
 
-let jump_addr addr = match addr with
+let asm_jmp addr = match addr with
     Local_bp _ -> Uncomplete_compilation_error "I shouldn't jump into a local bp code ! There should be a bug in the compiler."
   | Global lbl ->
-    let lbl_s = string_of_address lbl in
-    [(sp "jmpq %s" lbl_s, sp "GOTO %s" lbl_s)]
+    let addr_s = string_of_address addr in
+    [(sp "jmpq %s" addr_s, sp "GOTO %s" addr_s)]
+
+let asm_jl addr = 
+  Local_bp _ -> Uncomplete_compilation_error "I shouldn't jump into a local bp code ! There should be a bug in the compiler."
+| Global _ ->
+  let addr_s = string_of_address addr in
+  [(sp "jl %s" addr_s, sp "GOTO %s" addr_s)]
 
 (* Ajoute le contenu de addr dans la pile *)
 let push_stack addr =
@@ -106,7 +112,7 @@ let minus src dest =
 let not_bit_a_bit src dest =
   let src_s = string_of_address src in
   let dest_s = string_of_address dest in 
-  [("", sp "%s <- - (%s)" src_s);
+  [("", sp "%s <- not bit/bit (%s)" src_s);
    (sp "movq %s, %%r13" addr_s, "");
    ("notq %%r13", "");
    (sp "movq %%r13, %s" addr_s)]
@@ -129,7 +135,7 @@ let post_inc src dest =
 let pre_inc src dest =
   let src_s = string_of_address src in
   let dest_s = string_of_address dest in 
-  [("", sp "(%s)++  , resultat temporaire dans %s" src_s dest_s);
+  [("", sp "++(%s)  , resultat temporaire dans %s" src_s dest_s);
    (sp "movq %s, %%r13" addr_s, " (Passage dans les registres)");
    ("addq $1,%%r13", " (On incrémente en registre)");
    (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
@@ -140,7 +146,7 @@ let pre_inc src dest =
 let post_dec src dest =
   let src_s = string_of_address src in
   let dest_s = string_of_address dest in 
-  [("", sp "(%s)++   (resultat temporaire dans %s)" src_s dest_s);
+  [("", sp "(%s)--   (resultat temporaire dans %s)" src_s dest_s);
    (sp "movq %s, %%r13" addr_s, " (Passage dans les registres)");
    (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
    ("subq $1,%%r13", " (On incrémente en registre)");
@@ -150,13 +156,131 @@ let post_dec src dest =
 let pre_dec src dest =
   let src_s = string_of_address src in
   let dest_s = string_of_address dest in 
-  [("", sp "(%s)++  , resultat temporaire dans %s" src_s dest_s);
+  [("", sp "--(%s)  , resultat temporaire dans %s" src_s dest_s);
    (sp "movq %s, %%r13" addr_s, " (Passage dans les registres)");
    ("subq $1,%%r13", " (On incrémente en registre)");
    (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
    (sp "movq %%r13, %s" src_s, " (On modifie la valeur initiale sur la pile)")]
 
-  
+(* Binary operators *)
+(* NB : The code could be factorised, but I don't think it's
+   clearer so I may do it later *)
+
+(* Multiply to integers *)
+let mult x y dest =
+  let x_s = string_of_address x in
+  let y_s = string_of_address y in
+  let dest_s = string_of_address dest in 
+  [("", sp "%s = %s * %s" dest_s x_s y_s);
+   (sp "movq %s, %%r13" x_s, " (Passage dans les registres)");
+   (sp "movq %s, %%r14" y_s, " (Passage dans les registres)");
+   ("imulq %%r13,%%r14", " (On fait la multiplication)");
+   (sp "movq %%r13, %s" dest_s, " (On met le résultat dans la file)")]
+
+(* Division entière (quotient) *)
+let asm_div x y dest =
+  let x_s = string_of_address x in
+  let y_s = string_of_address y in
+  let dest_s = string_of_address dest in 
+  [("", sp "%s = %s / %s" dest_s x_s y_s);
+   (sp "movq %s, %%rax" x_s, " (Passage dans les registres)");
+   (sp "movq %s, %%r13" y_s, " (Passage dans les registres)");
+   ("cqto", " (On prépare la division)");
+   ("idivq %%r13", " (On fait la multiplication : quot = %rax; reste = %rdx;)");
+   (sp "movq %%rax, %s" dest_s, " (On met le résultat dans la file)")]
+
+(* Division entière (reste) *)
+let asm_mod x y dest =
+  let x_s = string_of_address x in
+  let y_s = string_of_address y in
+  let dest_s = string_of_address dest in 
+  [("", sp "%s = %s %% %s" dest_s x_s y_s);
+   (sp "movq %s, %%rax" x_s, " (Passage dans les registres)");
+   (sp "movq %s, %%r13" y_s, " (Passage dans les registres)");
+   ("cqto", " (On prépare la division)");
+   ("idivq %%r13", " (On fait la multiplication : quot = %rax; reste = %rdx;)");
+   (sp "movq %%rdx, %s" dest_s, " (On met le résultat dans la file)")]
+
+(* Addition *)
+let asm_add x y dest =
+  let x_s = string_of_address x in
+  let y_s = string_of_address y in
+  let dest_s = string_of_address dest in 
+  [("", sp "%s = %s + %s" dest_s x_s y_s);
+   (sp "movq %s, %%r13" x_s, " (Passage dans les registres)");
+   (sp "movq %s, %%r14" y_s, " (Passage dans les registres)");
+   ("addq %%r13, %%r14", " (On fait l'addition)");
+   (sp "movq %%r14, %s" dest_s, " (On met le résultat dans la file)")]
+
+
+(* Substraction *)
+let asm_sub x y dest =
+  let x_s = string_of_address x in
+  let y_s = string_of_address y in
+  let dest_s = string_of_address dest in 
+  [("", sp "%s = %s - %s" dest_s x_s y_s);
+   (sp "movq %s, %%r13" x_s, " (Passage dans les registres)");
+   (sp "movq %s, %%r14" y_s, " (Passage dans les registres)");
+   ("subq %%r14, %%r13", " (On fait l'addition)");
+   (sp "movq %%r13, %s" dest_s, " (On met le résultat dans la file)")]
+
+(* Access to an element of an array a[i] *)
+let asm_index a i dest =
+  let a_s = string_of_address x in
+  let i_s = string_of_address y in
+  let dest_s = string_of_address dest in 
+  [("", sp "%s <- %s[%s]" dest_s x_s y_s);
+   (sp "movq %s, %%r13" a_s, " (Passage dans les registres)");
+   (sp "movq %s, %%r14" i_s, " (Passage dans les registres)");
+   ("movq (%%r13, %%r14, 8), %%r14", " (On mets a[i] dans %%r14)");
+   (sp "movq %%r14, %s" dest_s, " (On mets le resultat sur la pile)")]
+
+(********* Comparaison operators *********)
+let general_comp comp_command func asm_bloc x y dest =
+  let x_s = string_of_address x in
+  let y_s = string_of_address y in
+  let dest_s = string_of_address dest in
+  let cond_bloc_name = genlab func in
+  let after_bloc_name = genlab func in
+  (* Put to 0 the dest_s, if the jump is done dest_s will become 1 *)
+  asm_bloc#add_content_d
+    [("", sp "Comparaison %s < %s, result in %s" x_s y_s dest_s);
+     (sp "movq %s, %%r13" a_s, " (Passage dans les registres)");
+     (sp "movq %s, %%r14" i_s, " (Passage dans les registres)");
+     (sp "movq $0, %%r15", " (On mets à 0 le resultat, valeur par deffaut)")
+     ("cmpq %%r14, %%r13", " (On compare, attention à l'inversion)");
+     (sp "%s %s" comp_command cond_bloc_name, " (On saute si %%r13 < %%r14)");
+     (sp "jmpq %s" after_bloc_name, " (On saute directement au bloc suivant sinon)")]
+    [];
+  (* Create a sub bloc that will be usefull if the condition is realised *)
+  let cond_asm_bloc =
+    new asm_block cond_bloc_name
+      [("", sp "Si on arrive là c'est car on vient du bloc %s pour une comparaison <." asm_bloc#get_block_name);
+       ("movq $1, %%r15", " (On mets donc à 1 la valeur de retour de la condition < )");
+       (sp "jmpq %s" after_bloc_name," (On revient au bloc suivant)")
+      ]
+      []
+      [] in
+  (* Create a bloc that will be used after to continue a the code after
+     the condition. The end of the asm_bloc is removed from asm_bloc and
+     put at the end of this new bloc. The next instructions will write
+     in this bloc. *)
+  let after_asm_bloc =
+    new asm_block after_bloc_name
+      [("","Next block after the condition on bloc %s" asm_bloc#get_block_name);
+       (sp "movq %%r15, %s" dest_s, " (Save the result in the stack)")]
+      []
+      []
+  in
+  asm_bloc#fork_bloc after_asm_bloc
+
+let asm_lt func asm_bloc x y dest = general_comp "jl"
+let asm_le func asm_bloc x y dest = general_comp "jle"
+let asm_eq func asm_bloc x y dest = general_comp "je"
+
+(******** Conditions ternaires : EIF(e1,e2,e3) est e1?e2:e3 *********)
+
+let asm_eif =
 
 
 (* ==================== *)
@@ -227,6 +351,12 @@ class asm_block (block_name : string) (beg_cont : (string * string) list) (end_c
     method add_content_d beg_b end_b =
       begin_content <- (begin_content @ beg_b);
       end_content <- (end_b @ end_content)
+    (* /!\ This function remove the already existing beginning code *)
+    method set_begin_content beg_b =
+      begin_content <- beg_b
+    (* /!\ This function remove the already existing ending code *)
+    method set_end_content end_b =
+      end_content <- end_b
     method get_this_content_string =
       (sp "%s\n" block_name)
       ^ (List.map (fun (s,debug) -> sp "    %s # %s\n" s debug) begin_content
@@ -237,6 +367,20 @@ class asm_block (block_name : string) (beg_cont : (string * string) list) (end_c
       (List.map (fun o -> o#get_this_content_string) others_blocks
        |> List.fold_left (^) "")
       ^ (this#get_this_content_string)
+        
+    (** When a bloc is cut, a new bloc is created. Since the compiler
+       must write in this new bloc, the old bloc is saved in "others_blocks"
+       while the blocks takes the values of the new block. It returns
+        the address of the old block. *)
+    method fork_bloc new_bloc =
+      let old_bloc =
+        new asm_block bloc_name begin_content [] others_blocks
+      in
+      bloc_name <- new_bloc#get_bloc_name;
+      begin_content <- new_bloc#get_begin_content;
+      end_content <- (new_bloc#get_end_content) @ (end_content);
+      others_blocks <- new_bloc#get_others_blocks;
+      (old_bloc)
   end
 
 (* class block (block_name : string) (beg_cont : (string * string) list) (end_cont : (string*string) list) (others_blocks : block list) = *)
@@ -467,42 +611,95 @@ let asm_block_of_expr func expr env func_env asm_bloc =
                              e+e', e-e', ou e[e']. *)
       (* On évalue les expressions *)
       let (env1, expr1_addr) =
-        asm_block_of_expr func expr1 env func_env asm_bloc in
+        try
+          asm_block_of_expr func expr1 env func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc1 er
+      in
       let (new_env, expr2_addr) =
-        asm_block_of_expr func expr1 env1 func_env asm_bloc in
+        try
+          asm_block_of_expr func expr1 env1 func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc2 er
+      in
       (* Ajoute adresse temporaire pour le resultat *)
       let new_env = env#add asm_bloc "" in
       let result_addr = new_env#get "" in
       match op with
         S_MUL ->
         begin
-
+          asm_bloc#add_content_d
+            (mult expr1_addr expr2_addr result_addr);
+          (new_env, result_addr)
         end
       | S_DIV ->
         begin
-
+          asm_bloc#add_content_d
+            (asm_div expr1_addr expr2_addr result_addr);
+          (new_env, result_addr)
         end
       | S_MOD ->
         begin
-
+          asm_bloc#add_content_d
+            (asm_mod expr1_addr expr2_addr result_addr);
+          (new_env, result_addr)
         end
       | S_ADD ->
         begin
-
+          asm_bloc#add_content_d
+            (asm_add expr1_addr expr2_addr result_addr);
+          (new_env, result_addr)
         end
       | S_SUB ->
         begin
-
+          asm_bloc#add_content_d
+            (asm_sub expr1_addr expr2_addr result_addr);
+          (new_env, result_addr)
         end
       | S_INDEX ->
         begin
-
+          asm_bloc#add_content_d
+            (asm_index expr1_addr expr2_addr result_addr);
+          (new_env, result_addr)
         end
     end
-  | CMP of cmp_op * loc_expr * loc_expr
-    (** CMP(cop,e,e') vaut e<e', e<=e', ou e==e' *)
-  | EIF of loc_expr * loc_expr * loc_expr
-    (** EIF(e1,e2,e3) est e1?e2:e3 *)
+  | CMP (op, (loc1,expr1), (loc2, expr2)) ->
+    begin 
+      (** CMP(cop,e,e') vaut e<e', e<=e', ou e==e' *)
+      (* On évalue les expressions *)
+      let (env1, expr1_addr) =
+        try
+          asm_block_of_expr func expr1 env func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc1 er
+      in
+      let (new_env, expr2_addr) =
+        try
+          asm_block_of_expr func expr1 env1 func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc2 er
+      in
+      (* Ajoute adresse temporaire pour le resultat *)
+      let new_env = env#add asm_bloc "" in
+      let result_addr = new_env#get "" in
+      match op with
+        C_LT ->
+        begin
+          asm_lt func asm_bloc expr1_addr expr2_addr result_addr;
+          (new_env, result_addr)
+        end
+      | C_LE ->
+        begin
+          asm_le func asm_bloc expr1_addr expr2_addr result_addr;
+          (new_env, result_addr)
+        end
+      | C_EQ ->
+        begin
+          asm_eq func asm_bloc expr1_addr expr2_addr result_addr;
+          (new_env, result_addr)
+        end
+    end
+  | EIF ((loc1,expr1), (loc2, expr2), (loc3,expr3)) ->
+    begin
+      (** EIF(e1,e2,e3) est e1?e2:e3 *)
+      
+    end
   | ESEQ of loc_expr list
     (** e1, ..., en [sequence, analogue a e1;e2 au niveau code];
       si n=0, represente skip. *)
