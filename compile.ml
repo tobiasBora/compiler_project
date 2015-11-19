@@ -261,6 +261,7 @@ let general_comp comp_command func asm_bloc x y dest =
       ]
       []
       [] in
+  asm_bloc#add_block cond_asm_bloc;
   (* Create a bloc that will be used after to continue a the code after
      the condition. The end of the asm_bloc is removed from asm_bloc and
      put at the end of this new bloc. The next instructions will write
@@ -274,16 +275,29 @@ let general_comp comp_command func asm_bloc x y dest =
   in
   asm_bloc#fork_bloc after_asm_bloc
 
-let asm_lt func asm_bloc x y dest = general_comp "jl"
-let asm_le func asm_bloc x y dest = general_comp "jle"
-let asm_eq func asm_bloc x y dest = general_comp "je"
+let asm_lt func asm_bloc x y dest =
+  general_comp "jl" func asm_bloc x y dest
+let asm_le func asm_bloc x y dest =
+  general_comp "jle" func asm_bloc x y dest
+let asm_eq func asm_bloc x y dest =
+  general_comp "je" func asm_bloc x y dest
 
 (******** Conditions ternaires : EIF(e1,e2,e3) est e1?e2:e3 *********)
 
-let asm_eif func asm_bloc x y =
+(* let asm_eif func asm_bloc x y = *)
   
+(* ******** Condition ******** *)
 
-
+let asm_condition_part1 func asm_bloc src dest_asm1 dest_asm2 =
+  let src_s = string_of_address src in
+  asm_bloc#add_content_d
+    [("","Début de la condition");
+     (sp "movq %s, %%r13" src_s," (Sauvegarde en registres)");
+     ("cmpq $0, %%r13", " (Comparaison)")
+     (sp "je %s" dest_asm2, sp " (Si la condition n'est *pas* respectée, GOTO %s)" dest_asm2);
+    (sp "je %s" dest_asm1, sp " (Si la condition est respectée, GOTO %s)" dest_asm1)]
+    []
+  
 (* ==================== *)
 (* === Environments === *)
 (* ==================== *)
@@ -790,16 +804,62 @@ let asm_block_of_code func code env func_env asm_bloc =
       let (env2, _) = asm_block_of_expr func expr env func_env asm_bloc in
       (env2, func_env)
     end
-  | CIF of loc_expr * loc_code * loc_code (** if (e) c1; else c2; *)
-  | CWHILE ((loc_e, expr), (loc_c, code2)) -> (** while (e) c1; *)
-    asm_block_of_code
-      (CBLOCK ([],
-               [(loc_e, CIF ((loc_e,expr),
-                             (loc_c, code2),
-                             (loc_c, CBLOCK ([],[]))))]))
-      env func_env asm_bloc
-  | CRETURN of loc_expr option (** return; ou return (e); *)
-
+  | CIF ((loc1, expr1), (loc2, code2), (loc3, code3)) ->
+    begin
+      let (env2, return_addr) =
+        try
+          asm_block_of_expr func expr1 env func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc1 er
+      in
+      (* --- Define new asm blocks names --- *)
+      (* A bloc that contains the code after the if condition *)
+      let after_asm_bloc_name = genlab () in
+      (* A bloc that will be run if the condition is ok *)
+      let cond1_bloc_name = genlab () in
+      (* A bloc that will be run if the condition is not ok *)
+      let cond2_bloc_name = genlab () in
+      (* --- Define the new asm blocks --- *)
+      (* First run the condition *)
+      asm_condition_part1 func asm_bloc return_addr;
+      (* --- Then build the two asm codes ---
+         They must come back in after_asm_asm bloc at the end *)
+      let asm_bloc_cond1 =
+        new asm_block cond1_bloc_name
+          [("",sp "Jump here if the condition at the end of the block %s is respected" asm_bloc#get_block_name)]
+          (asm_jmp (Global after_asm_bloc_name))
+          []
+      in
+      (* The return env isn't interesting since the intern variables
+         shouldn't be available after the run of the condition  *)
+      let (_,_) = asm_block_of_code func code2 env2 func_env asm_bloc_cond1 in
+      let asm_bloc_cond2 =
+        new asm_block cond2_bloc_name
+          [("",sp "Jump here if the condition at the end of the block %s is *not* respected" asm_bloc#get_block_name)]
+          (asm_jmp (Global after_asm_bloc_name))
+          []
+      in
+      asm_bloc#add_block asm_bloc_cond1;
+      asm_bloc#add_block asm_bloc_cond2;
+      let (_,_) = asm_block_of_code func code2 env2 func_env asm_bloc_cond2 in
+      (* Build the after bloc *)
+      let asm_bloc_after =
+        new asm_block after_asm_bloc_name
+          [("",sp "Bloc that is run after the run of the content of the condition at the end of the block %s." asm_bloc#get_block_name)]
+          []
+          []
+      in
+      asm_bloc#fork asm_bloc
+    end
+  | CWHILE ((loc_e, expr), (loc_c, code2)) ->
+    begin
+      (** while (e) c1; *)
+      (* TODO *)
+    end
+  | CRETURN loc_expr_opt ->
+    begin
+      (** return; ou return (e); *)
+      (* TODO *)
+    end
 
 (* =================== *)
 (* === Compilation === *)
