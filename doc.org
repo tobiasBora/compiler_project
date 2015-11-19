@@ -1,0 +1,47 @@
+* Le projet
+** La page du projet
+[[www.lsv.ens-cachan.fr/~goubault/CoursProgrammation/MiniC1/minicindex.html]]
+
+** Structure du projet, compilation
+
+On modifie le fichier =compile.ml=.
+On compile avec
+: make
+Ceci génère un fichier mcc :
+: ../mcc cat.c
+
+Pour produire seulement le code asm :
+: ../mcc -E cat.c > cat.s
+
+L'option -D permet d'obtenir la liste des fonctions (lance "print_declaration dans cprint.ml").
+
+Pour être verbeux, option -v1, -v2... (on la récupère via Verbose.verbose)
+
+On peut utiliser le déboggeur graphique ddd.
+
+source : http://www.lsv.ens-cachan.fr/~goubault/CoursProgrammation/MiniC1/minic002.html
+
+** L'arbre syntaxique
+On peut regarder pour plus de détails le fichier de parsing =ctab.mly= / =clex.mll=.
+
+Le type de sortie est Cparse.var_declaration (cf =cparse.ml= pour la liste)
+
+Le type locator est juste un pointeur sur des informations permettant aux fonctions Error.error et Error.warning d’afficher des message d’erreur sensés.
+
+Le fichier cparse.ml contient aussi des fonctions utiles, comme string_of_loc_expr, qui vous permettent d’obtenir une version imprimable d’une expression C--, ce que vous pouvez utiliser en phase de débogage.
+
+Le fichier genlab.ml contient une fonction genlab qui vous permettra de fabriquer des labels uniques, ce qui devrait être bien pratique lorsque vous émettrez des instructions de saut dans votre code assembleur.
+
+Le fichier verbose.ml déclare une variable verbose que vous pourrez tester pour régler le niveau d’informations de débogage que vous voudrez afficher (elle vaut 1 si vous appelez mcc avec l’option -v1, 2 si avec l’option -v2, et 0 par défaut).
+
+
+** Le C--
+Il ne reste que les types int, char *, et les pointeurs sur les types C-- (récursivement). (chaque type tient sur 32/64 bits)
+
+C-- \subset C sauf dans un cas : l’arithmétique sur les pointeurs a une sémantique différente en C-- et en C. Si vous déclarez int *p et écrivez p++ en C, ceci ajoute sizeof(int), soit 4, à l’adresse p. En C–, ça n’est censé qu’ajouter un. Je doute que vous ayez à considérer ce genre de subtilités, mais qui sait.
+
+Sémantique opérationelle : http://www.lsv.ens-cachan.fr/~goubault/CoursProgrammation/prog1_sem1.pdf section 1.6.
+
+** Référence asm
+Annexe B :
+http://www.lsv.ens-cachan.fr/~goubault/CoursProgrammation/prog1_lecon2.pdf
