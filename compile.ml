@@ -280,7 +280,7 @@ let asm_eq func asm_bloc x y dest = general_comp "je"
 
 (******** Conditions ternaires : EIF(e1,e2,e3) est e1?e2:e3 *********)
 
-let asm_eif =
+let asm_eif func asm_bloc x y = 
 
 
 (* ==================== *)
@@ -543,6 +543,7 @@ let asm_block_of_expr func expr env func_env asm_bloc =
             let (new_env, new_addr) = asm_block_of_expr func exprn curr_env func_env asm_bloc in
             (new_env, new_addr::addr_list)) env loc_expr_l
       in
+      (* TODO : est-ce qu'on le fait vraiment de droite à gauche ??? *)
       (* On empile les arguments sur la pile
          comme expliqué sur la convention de pile :
          http://www.cs.virginia.edu/~evans/cs216/guides/stack-convention.png
@@ -555,55 +556,56 @@ let asm_block_of_expr func expr env func_env asm_bloc =
   | OP1 (op, (loc1, expr1)) ->
     (** OP1(mop, e) dénote -e, ~e, e++, e--, ++e, ou --e. *)
     begin
-      try
-        (* On évalue l'expression *)
-        let (new_env1, expr1_addr) =
-          asm_block_of_expr func expr1 env func_env asm_bloc in
-        (* Ajoute adresse temporaire pour le resultat *)
-        let new_env = env#add asm_bloc "" in
-        let result_addr = new_env#get "" in
-        match op with
-          M_MINUS ->
-          begin
-            asm_bloc#add_content_d
-              (minus expr1_addr result_addr);
-            (new_env, result_addr)
-          end
-        | M_NOT ->
-          begin
-            asm_bloc#add_content_d
-              (not_bit_a_bit expr1_addr result_addr);
-            (new_env, result_addr)
-          end
-        | M_POST_INC ->
-          begin
-            asm_bloc#add_content_d
-              (post_inc expr1_addr result_addr);
-            (new_env, result_addr)
-          end
-        | M_PRE_INC ->
-          begin
-            (* Here the result_addr could be the same as the expr1,
-               but anyway  *)
-            asm_bloc#add_content_d
-              (pre_inc expr1_addr result_addr);
-            (new_env, result_addr)
-          end
-        | M_POST_DEC ->
-          begin
-            asm_bloc#add_content_d
-              (post_dec expr1_addr result_addr);
-            (new_env, result_addr)
-          end
-        | M_PRE_DEC ->
-          begin
-            (* Here the result_addr could be the same as the expr1,
-               but anyway  *)
-            asm_bloc#add_content_d
-              (pre_dec expr1_addr result_addr);
-            (new_env, result_addr)
-          end
-      with Uncomplete_compilation_error er -> compile_raise loc1 er
+      (* On évalue l'expression *)
+      let (env1, expr1_addr) =
+        try
+          asm_block_of_expr func expr1 env func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc1 er
+      in
+      (* Ajoute adresse temporaire pour le resultat *)
+      let new_env = env1#add asm_bloc "" in
+      let result_addr = new_env#get "" in
+      match op with
+        M_MINUS ->
+        begin
+          asm_bloc#add_content_d
+            (minus expr1_addr result_addr);
+          (new_env, result_addr)
+        end
+      | M_NOT ->
+        begin
+          asm_bloc#add_content_d
+            (not_bit_a_bit expr1_addr result_addr);
+          (new_env, result_addr)
+        end
+      | M_POST_INC ->
+        begin
+          asm_bloc#add_content_d
+            (post_inc expr1_addr result_addr);
+          (new_env, result_addr)
+        end
+      | M_PRE_INC ->
+        begin
+          (* Here the result_addr could be the same as the expr1,
+             but anyway  *)
+          asm_bloc#add_content_d
+            (pre_inc expr1_addr result_addr);
+          (new_env, result_addr)
+        end
+      | M_POST_DEC ->
+        begin
+          asm_bloc#add_content_d
+            (post_dec expr1_addr result_addr);
+          (new_env, result_addr)
+        end
+      | M_PRE_DEC ->
+        begin
+          (* Here the result_addr could be the same as the expr1,
+             but anyway  *)
+          asm_bloc#add_content_d
+            (pre_dec expr1_addr result_addr);
+          (new_env, result_addr)
+        end
     end
   | OP2 (op, (loc1, expr1), (loc2, expr2)) ->
     begin
@@ -615,13 +617,13 @@ let asm_block_of_expr func expr env func_env asm_bloc =
           asm_block_of_expr func expr1 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
-      let (new_env, expr2_addr) =
+      let (env2, expr2_addr) =
         try
           asm_block_of_expr func expr1 env1 func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
       (* Ajoute adresse temporaire pour le resultat *)
-      let new_env = env#add asm_bloc "" in
+      let new_env = env2#add asm_bloc "" in
       let result_addr = new_env#get "" in
       match op with
         S_MUL ->
@@ -670,13 +672,13 @@ let asm_block_of_expr func expr env func_env asm_bloc =
           asm_block_of_expr func expr1 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
-      let (new_env, expr2_addr) =
+      let (env2, expr2_addr) =
         try
           asm_block_of_expr func expr1 env1 func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
       (* Ajoute adresse temporaire pour le resultat *)
-      let new_env = env#add asm_bloc "" in
+      let new_env = env2#add asm_bloc "" in
       let result_addr = new_env#get "" in
       match op with
         C_LT ->
@@ -698,12 +700,33 @@ let asm_block_of_expr func expr env func_env asm_bloc =
   | EIF ((loc1,expr1), (loc2, expr2), (loc3,expr3)) ->
     begin
       (** EIF(e1,e2,e3) est e1?e2:e3 *)
-      
+      (* On évalue les expressions *)
+      let (env1, expr1_addr) =
+        try
+          asm_block_of_expr func expr1 env func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc1 er
+      in
+      (* Ajoute adresse temporaire pour le resultat *)
+      let new_env = env#add asm_bloc "" in
+      let result_addr = new_env#get "" in
+      (* TODO *)
     end
-  | ESEQ of loc_expr list
-    (** e1, ..., en [sequence, analogue a e1;e2 au niveau code];
-      si n=0, represente skip. *)
-
+  | ESEQ l_expr ->
+    begin
+      (** e1, ..., en [sequence, analogue a e1;e2 au niveau code];
+          si n=0, represente skip. *)
+      match l with
+        [] -> (env, return_address)
+      | (loc1,expr1)::r ->
+        begin
+          let (env1, expr1_addr) =
+            try
+              asm_block_of_expr func expr1 env func_env asm_bloc
+            with Uncomplete_compilation_error er -> compile_raise loc1 er
+          in
+          asm_block_of_expr func (ESEQ r) env1 func_env asm_bloc
+        end
+    end
 (* (env, func_env) *)
 let asm_block_of_code code env func_env asm_bloc =
   (* Declaration of variables/function.
