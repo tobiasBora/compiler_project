@@ -513,9 +513,6 @@ let asm_while_part1 cond_asm_bloc return_addr main_asm_name after_asm_name =
      (sp "jmpq %s" main_asm_name, " (If the condition is true then go in main_asm_name")]
     [];
 
-let asm_while_part2 
-
-
 
 (* ================== *)
 (* === Convertion === *)
@@ -1059,11 +1056,20 @@ let asm_block_of_code func code env func_env asm_bloc =
       (env, func_env)
     end
   | CRETURN loc_expr_opt ->
-    begin
+    begin (** return; ou return (e); *)
       match loc_expr_opt with
-        None -> ()
-      (** return; ou return (e); *)
-      (* TODO *)
+        None -> (* Anything could be in %rax *) (env, func_env)
+      | Some (loc,expr) ->
+        begin
+          let (env1, return_address) =
+            asm_block_of_expr func expr env func_env asm_bloc in
+          asm_bloc#add_content_d
+            [(sp "movq %s,%%rax" return_address, "Mets la valeur de retour de la fonction dans %rax");
+             ("movq 0(%%rbp),%%rsp","On remets le pointeur de pile au début")];
+          ("ret","On retourne à l'instruction assembleur sauvegardée par call")
+            [];
+          (env,return_address)
+        end
     end
 
 (* =================== *)
