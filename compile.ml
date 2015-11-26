@@ -26,7 +26,7 @@ let rec gen_list a b =
    Function :
    - appeller (fprintf)
    - être appeller
-   - 
+   - gérer cas particuliers types malloc/retours en 32 bits
 
 
    Easter Eggs
@@ -82,22 +82,41 @@ let address_of_argument n_arg = match n_arg with
 (* Idea : the blocs are asm code lists. You can add the code inside.
 *)
 
-class asm_block (block_name : string) (beg_cont : (string * string) list) (end_cont : (string*string) list) (others_blocks : asm_block list) =
+class asm_block (block_name' : string) (beg_cont' : (string * string) list) (end_cont' : (string*string) list) (others_blocks_after' : asm_block list) =
   object(this)
-    val mutable bloc_name = block_name
-    val mutable before_everything = []
-    val mutable begin_content = beg_cont (* (Content * Debug) list*)
-    val mutable end_content = end_cont   (* (Content * Debug) list*)
-    val mutable others_blocks = others_blocks (* Bloc list *)
-    method get_block_name = block_name
+    val mutable bloc_name = block_name'
+    val mutable before_anything = []
+    val mutable begin_content = beg_cont' (* (Content * Debug) list*)
+    val mutable end_content = end_cont'   (* (Content * Debug) list*)
+    val mutable others_blocks_before = [] (* Bloc list *)
+    val mutable others_blocks_after = others_blocks_after' (* Bloc list *)
+    method get_block_name = bloc_name
     method get_begin_content = begin_content
     method get_end_content = end_content
-    method get_others_blocks = others_blocks
-    method get_before_everything (l : (string*string) list) =
-      before_everything
-    method set_before_everything (l : (string*string) list) =
-      before_everything <- l
-    method add_block bloc = others_blocks <- (bloc::others_blocks)
+    method get_others_blocks_before = others_blocks_before
+    method get_others_blocks_after = others_blocks_after
+    method get_before_anything =
+      before_anything
+    method set_before_anything (l : (string*string) list) =
+      before_anything <- l
+    method set_others_blocks_before bl = others_blocks_before <- bl
+    method set_others_blocks_after bl = others_blocks_after <- bl
+    method add_block (bloc : asm_block) =
+      others_blocks_after <- (others_blocks_after @ [bloc]);
+      if bloc#get_before_anything = [] then
+        bloc#set_before_anything before_anything
+      else ()
+    method add_block_before (bloc : asm_block) =
+      if bloc#get_before_anything = [] then
+        bloc#set_before_anything before_anything
+      else ();
+      others_blocks_after <- (others_blocks_after @ [bloc]);
+    method add_block_after (bloc : asm_block) =
+      pr "Add after : %s in %s\n" bloc#get_block_name bloc_name;
+      if bloc#get_before_anything = [] then
+        bloc#set_before_anything before_anything
+      else ();
+      others_blocks_after <- (others_blocks_after @ [bloc]);
     (* Add some content into the block, it takes content list. The debug value is set to the empty string *)
     method add_content beg_b end_b =
       begin_content <- (begin_content @ (List.map (fun s -> (s,"")) beg_b));
@@ -116,9 +135,9 @@ class asm_block (block_name : string) (beg_cont : (string * string) list) (end_c
       end_content <- end_b
     method get_this_content_string =
       ("##############\n")
-      ^ (List.map (fun (s,debug) -> sp "    %s # %s\n" s debug) before_everything
+      ^ (List.map (fun (s,debug) -> sp "    %s # %s\n" s debug) before_anything
        |> List.fold_left (^) "")
-      ^ (sp "%s:\n" block_name)
+      ^ (sp "%s:\n" bloc_name)
       ^ (List.map (fun (s,debug) -> sp "    %s # %s\n" s debug) begin_content
          |> List.fold_left (^) "")
       ^ (List.map (fun (s,debug) -> sp "    %s # %s\n" s debug) end_content
@@ -126,8 +145,10 @@ class asm_block (block_name : string) (beg_cont : (string * string) list) (end_c
       ^ ("#-------------\n")
 
     method get_content_string =
-      (this#get_this_content_string)
-      ^ (List.map (fun o -> o#get_content_string) others_blocks
+      (List.map (fun o -> o#get_content_string) others_blocks_before
+       |> List.fold_left (^) "")
+      ^ (this#get_this_content_string)
+      ^ (List.map (fun o -> o#get_content_string) others_blocks_after
          |> List.fold_left (^) "")
     (** When a bloc is cut, a new bloc is created. Since the compiler
        must write in this new bloc, the old bloc is saved in "others_blocks"
@@ -135,12 +156,16 @@ class asm_block (block_name : string) (beg_cont : (string * string) list) (end_c
         the address of the old block. *)
     method fork_block (new_bloc : asm_block) : (asm_block) =
       let old_bloc =
-        new asm_block bloc_name begin_content [] others_blocks
+        new asm_block bloc_name begin_content [] others_blocks_after
       in
+      old_bloc#set_others_blocks_before (others_blocks_before);
+      old_bloc#set_before_anything before_anything;
+      
       bloc_name <- new_bloc#get_block_name;
       begin_content <- new_bloc#get_begin_content;
       end_content <- (new_bloc#get_end_content) @ (end_content);
-      others_blocks <- new_bloc#get_others_blocks;
+      others_blocks_before <- (old_bloc :: new_bloc#get_others_blocks_before);
+      others_blocks_after <- (new_bloc#get_others_blocks_after);
       (old_bloc)
   end
 
@@ -307,13 +332,11 @@ let asm_call_mv_arg asm_bloc env src n_arg =
     end
   else
     begin
-      let new_env = env#add asm_bloc "" in
-      let dest_s = new_env#gets "" in
       asm_bloc#add_content_d
         [(sp "movq %s, %%r13" src_s, sp " (Argument %d en registre)" n_arg);
-         (sp "movq %%r13, %s" dest_s, sp " (Argument %d sur la pile)" n_arg)]
+         ("pushq %r13", sp " (Argument %d sur la pile)" n_arg)]
         [];
-      (new_env, n_arg-1)
+      (env, n_arg-1)
     end
 
 let asm_call_call f_name =
@@ -490,7 +513,7 @@ let general_comp comp_command func asm_bloc x y dest =
       ]
       []
       [] in
-  asm_bloc#add_block cond_asm_bloc;
+  asm_bloc#add_block_after cond_asm_bloc;
   (* Create a bloc that will be used after to continue a the code after
      the condition. The end of the asm_bloc is removed from asm_bloc and
      put at the end of this new bloc. The next instructions will write
@@ -553,7 +576,6 @@ let asm_while_part1 cond_asm_bloc return_addr main_asm_name after_asm_name =
 (* sweet family, family *)
 (* This return a couple (env, return_address) *)
 let rec asm_block_of_expr func expr env func_env asm_bloc =
-  Printf.printf "I'm in asm_block_of_expr\n";
   match expr with
   | VAR var_name ->
     begin
@@ -581,10 +603,10 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
           []
           []
       in
-      var_asm_bloc#set_before_everything
+      var_asm_bloc#set_before_anything
         [(".data",sp "Définir la chaine constante globale \"%s\"" str);
          (".align 8","")];
-      asm_bloc#add_block var_asm_bloc;
+      asm_bloc#add_block_before var_asm_bloc;
       (env, String bloc_name)
     end
   | SET_VAR (var_name, (loc,expr1)) ->
@@ -634,7 +656,6 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     end
   | CALL (f_name, loc_expr_l) -> (** appel de fonction f(e1,...,en) *)
     begin
-      
       let (end_env, rev_end_addr_list) =
         List.fold_left (fun (curr_env, addr_list) (locn, exprn) ->
             let (new_env, new_addr) = asm_block_of_expr func exprn curr_env func_env asm_bloc in
@@ -643,10 +664,50 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       let end_addr_list = List.rev rev_end_addr_list in
       let n = List.length end_addr_list in
       (* Mets les arguments sur les registres et la pile *)
-      (* TODO : aligner les éléments *)
-      let (before_call_env, _) = List.fold_left
+      (* Aligne le CALL *)
+      let n_arg = List.length loc_expr_l in
+      let n_arg_on_stack = if n_arg <= 6 then 0 else n_arg - 6 in
+      (* NB : This code could really be factorized. I'm just checking it
+          works before doing it*)
+      let restore_after_call =
+        if (n_arg_on_stack mod 2 = 1) then
+          begin
+            (* If we add an odd number of elements on the stack *)
+            (* We align at 8 *)
+            asm_bloc#add_content_d
+              [("","Nombre d'argument impair, on aligne à 8");
+               ("movq %rsp,%r13", "Sauve l'ancienne valeur du pointeur de liste");
+               ("pushq %r13","Push cette valeur deux fois sur la pile");
+               ("pushq %r13","Push cette valeur deux fois sur la pile");
+               ("movq %rsp,%r14", "Sauve la nouvelle valeur du pointeur de liste");
+               ("subq $8, %r14","... et l'aligne à 0+8 en 2 temps ((0x28 - 0x8) .|. 8)");
+               ("orq $8, %r14","... et l'aligne à 0+8 en 2 temps ((0x28 - 0x8) .|. 8)");
+               ("movq %r14, %rsp","...puis le remet dans le pointeur de liste")]
+              [];
+            [("","Restaure le pointeur de liste");
+             (sp "movq %d(%%rsp),%%rsp" (8*(n_arg_on_stack + 1))," Reprends l'ancienne valeur de la pile")]
+          end
+        else
+          begin
+            (* If we add an even number of elements on the stack *)
+            (* We align at 16 *)
+            asm_bloc#add_content_d
+              [("","Nombre d'argument pair, on aligne à 16");
+               ("movq %rsp,%r13", "Sauve l'ancienne valeur du pointeur de liste");
+               ("pushq %r13","Push cette valeur deux fois sur la pile");
+               ("pushq %r13","Push cette valeur deux fois sur la pile");
+               ("movq %rsp,%r14", "Sauve la nouvelle valeur du pointeur de liste");
+               ("andq $-16, %r14","... et l'aligne à 16");
+               ("movq %r14, %rsp","...puis le remet dans le pointeur de liste")]
+              [];
+            [("","Restaure le pointeur de liste après le call");
+             (sp "movq %d(%%rsp),%%rsp" (8*(n_arg_on_stack + 1))," Reprends l'ancienne valeur de la pile")]
+
+          end
+      in
+      (* Remets après les derniers arguments sur la liste *)
+      let (_, _) = List.fold_left
           (fun (tmp_env, n_arg) src ->
-             Printf.printf "==> end : %d\n" n_arg;
              asm_call_mv_arg asm_bloc tmp_env src n_arg
           )
           (end_env, (n))
@@ -654,9 +715,10 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       in
       (* Appel de la fonction *)
       asm_bloc#add_content_d
-        (asm_call_call f_name)
+        ((asm_call_call f_name)
+         @ restore_after_call)
         [];
-      let after_call_env = before_call_env#add asm_bloc "" in
+      let after_call_env = end_env#add asm_bloc "" in
       let dst = after_call_env#get "" in
       asm_bloc#add_content_d
         (asm_call_save_result dst)
@@ -776,7 +838,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
         end
     end
   | CMP (op, (loc1,expr1), (loc2, expr2)) ->
-    begin 
+    begin
       (** CMP(cop,e,e') vaut e<e', e<=e', ou e==e' *)
       (* On évalue les expressions *)
       let (env1, expr1_addr) =
@@ -852,8 +914,8 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
          @ (mv_gen "%r13" (string_of_address return_addr))
          @ (asm_jmp (Global name_after)));
       (* Plug the new after bloc to these conditions *)
-      asm_bloc#add_block cond1_asm_bloc;
-      asm_bloc#add_block cond2_asm_bloc;
+      asm_bloc#add_block_after cond1_asm_bloc;
+      asm_bloc#add_block_after cond2_asm_bloc;
       ignore(asm_bloc#fork_block after_asm_bloc);
       (new_env, return_addr)
     end
@@ -883,7 +945,6 @@ func is "" if we are not in a function, else it contains the name of
 the function
 (env, func_env) *)
 let rec asm_block_of_code func (code : code) env func_env asm_bloc =
-  Printf.printf "I'm in asm_block_of_code, func = %s\n" func;
   (* Declaration of variables/function.
      It returns a new env, func_env, and the asm_bloc is modified. *)
   let asm_block_of_var_declaration var_decl env func_env asm_bloc =
@@ -901,10 +962,10 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
                 []
                 []
             in
-            var_asm#set_before_everything
+            var_asm#set_before_anything
               [(".data", sp "Define the global variable %s" var_name);
                (".align 8","")];
-            asm_bloc#add_block var_asm;
+            asm_bloc#add_block_before var_asm;
             (env#addf var_name (Global var_name), func_env)
           end
         else (* The variable is local *)
@@ -912,7 +973,11 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
       end
     | CFUN (loc, func_name, var_decl_l, (next_loc, code)) ->
       if func <> "" then
-        compile_raise loc (sp "The function %s want to be declared inside the function %s... Pretty strange !" func_name func)
+        compile_raise loc (sp "The function \"%s\" want to be declared inside the function %s... Pretty strange !" func_name func)
+      else if (try ignore(env#get func_name); true with _ -> false) then
+        compile_raise loc (sp "The function %s has the same name as the global variable %s." func_name func_name)
+      else if (try ignore(func_env#get func_name); true with _ -> false) then
+        compile_raise loc (sp "The function %s has already been defined." func_name)
       else
         begin
           (* Create a new label for the function *)
@@ -921,7 +986,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
           let next_func_env = func_env#addf func_name (Global lbl) in
           (* Create the content of the bloc *)
           let new_asm_bloc = new asm_block lbl [] [] [] in
-          new_asm_bloc#set_before_everything
+          new_asm_bloc#set_before_anything
             [(".text", sp "Be sure that the function %s isn't in the .data section" func_name)];
           try
             let (first_args, last_args) = take_list 6 var_decl_l in
@@ -954,7 +1019,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
               asm_block_of_code func_name code env2 next_func_env new_asm_bloc
             in
             (* Add it to the main asm block *)
-            asm_bloc#add_block new_asm_bloc;
+            asm_bloc#add_block_after new_asm_bloc;
             (* Forget everything about the new environment *)
             (env,last_func_env)
           with Uncomplete_compilation_error er -> compile_raise next_loc er
@@ -967,7 +1032,6 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
   match code with
     CBLOCK (var_decl_l, loc_code_l) ->
     begin
-      pr "CBLOCK\n";
       (* We look for the declaration (function or variable) *)
       let (env4, func_env4) =
         List.fold_left (fun (env2,func_env2) var_decl ->
@@ -985,7 +1049,6 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
     end
   | CEXPR (loc,expr) ->
     begin
-      pr "CEXPR\n";
       (** une expression e; vue comme instruction. *)
       let (env2, _) = asm_block_of_expr func expr env func_env asm_bloc in
       (env2, func_env)
@@ -994,16 +1057,17 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
     begin
       let (env2, return_addr) =
         try
+          asm_bloc#add_content_d [("","DEBUT CONDITION")] [];
           asm_block_of_expr func expr1 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       (* --- Define new asm blocks names --- *)
-      (* A bloc that contains the code after the if condition *)
-      let after_asm_bloc_name = genlab func in
       (* A bloc that will be run if the condition is ok *)
       let cond1_bloc_name = genlab func in
       (* A bloc that will be run if the condition is not ok *)
       let cond2_bloc_name = genlab func in
+      (* A bloc that contains the code after the if condition *)
+      let after_asm_bloc_name = genlab func in
       (* --- Define the new asm blocks --- *)
       (* First run the condition *)
       asm_condition_part1 func asm_bloc return_addr cond1_bloc_name cond2_bloc_name;
@@ -1024,8 +1088,10 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
           (asm_jmp (Global after_asm_bloc_name))
           []
       in
-      asm_bloc#add_block asm_bloc_cond1;
-      asm_bloc#add_block asm_bloc_cond2;
+      pr "Asm_bloc in condition : %s\n" asm_bloc#get_block_name;
+      pr "List.lenght %d !\n" (List.length asm_bloc_cond1#get_before_anything);
+      asm_bloc#add_block_after asm_bloc_cond1;
+      asm_bloc#add_block_after asm_bloc_cond2;
       let (_,_) = asm_block_of_code func code2 env2 func_env asm_bloc_cond2 in
       (* Build the after bloc *)
       let asm_bloc_after =
@@ -1086,8 +1152,8 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
           []
       in
       (* Add the blocs in the old bloc *)
-      asm_bloc#add_block cond_asm_bloc;
-      asm_bloc#add_block main_asm_bloc;
+      asm_bloc#add_block_after cond_asm_bloc;
+      asm_bloc#add_block_after main_asm_bloc;
       (* Change the current writting bloc *)
       ignore(asm_bloc#fork_block after_asm_bloc);
       (env, func_env)
@@ -1119,6 +1185,6 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
 let compile out decl_list =
   let env = new env Str_map.empty (-1) (Local_bp 0) in
   let asm_bloc = new asm_block ".EVERYTHING" [] [] [] in
-  asm_bloc#set_before_everything [(".global main", "Usefull to make main available for everyone")];
+  asm_bloc#set_before_anything [(".global main", "Usefull to make main available for everyone")];
   ignore(asm_block_of_code "" (CBLOCK (decl_list, [])) env env asm_bloc);
   Printf.fprintf out "%s" asm_bloc#get_content_string
