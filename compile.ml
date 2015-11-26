@@ -421,7 +421,7 @@ let mult x y dest =
    (sp "movq %s, %%r13" x_s, " (Passage dans les registres)");
    (sp "movq %s, %%r14" y_s, " (Passage dans les registres)");
    ("imulq %r13,%r14", " (On fait la multiplication)");
-   (sp "movq %%r13, %s" dest_s, " (On met le résultat dans la file)")]
+   (sp "movq %%r14, %s" dest_s, " (On met le résultat dans la file)")]
 
 (* Division entière (quotient) *)
 let asm_div x y dest =
