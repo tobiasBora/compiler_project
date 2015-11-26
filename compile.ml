@@ -85,7 +85,7 @@ let address_of_argument n_arg = match n_arg with
 class asm_block (block_name' : string) (beg_cont' : (string * string) list) (end_cont' : (string*string) list) (others_blocks_after' : asm_block list) =
   object(this)
     val mutable bloc_name = block_name'
-    val mutable before_anything = []
+    val mutable before_anything = [(".text","Be sure that the function fact isn't in the .data section")] (* Default value *)
     val mutable begin_content = beg_cont' (* (Content * Debug) list*)
     val mutable end_content = end_cont'   (* (Content * Debug) list*)
     val mutable others_blocks_before = [] (* Bloc list *)
