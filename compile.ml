@@ -112,7 +112,6 @@ class asm_block (block_name' : string) (beg_cont' : (string * string) list) (end
       else ();
       others_blocks_after <- (others_blocks_after @ [bloc]);
     method add_block_after (bloc : asm_block) =
-      pr "Add after : %s in %s\n" bloc#get_block_name bloc_name;
       if bloc#get_before_anything = [] then
         bloc#set_before_anything before_anything
       else ();
@@ -302,7 +301,7 @@ let asm_jmp addr = match addr with
     Global lbl ->
     begin
       let addr_s = string_of_address addr in
-      [(sp "jmpq %s" addr_s, sp "GOTO %s" addr_s)]
+      [(sp "jmp %s" addr_s, sp "GOTO %s" addr_s)]
     end
   | _ -> raise (Uncomplete_compilation_error "I shouldn't jump into a local bp code ! There should be a bug in the compiler.")
 
@@ -502,14 +501,14 @@ let general_comp comp_command func asm_bloc x y dest =
      (sp "movq $0, %%r15", " (On mets à 0 le resultat, valeur par defaut)");
      ("cmpq %r14, %r13", " (On compare, attention à l'inversion)");
      (sp "%s %s" comp_command cond_bloc_name, " (On saute si %r13 < %r14)");
-     (sp "jmpq %s" after_bloc_name, " (On saute directement au bloc suivant sinon)")]
+     (sp "jmp %s" after_bloc_name, " (On saute directement au bloc suivant sinon)")]
     [];
   (* Create a sub bloc that will be usefull if the condition is realised *)
   let cond_asm_bloc =
     new asm_block cond_bloc_name
       [("", sp "Si on arrive là c'est car on vient du bloc %s pour une comparaison <." asm_bloc#get_block_name);
        ("movq $1, %r15", " (On mets donc à 1 la valeur de retour de la condition < )");
-       (sp "jmpq %s" after_bloc_name," (On revient au bloc suivant)")
+       (sp "jmp %s" after_bloc_name," (On revient au bloc suivant)")
       ]
       []
       [] in
@@ -543,7 +542,7 @@ let asm_eif_part1 asm_bloc expr1_addr name_cond1 name_cond2 =
      (sp "movq %s, %%r13" expr1_s, " (Sauvegarde en registres)");
      ("cmpq $0,%r13", " (Comparaison avec 0)");
      (sp "je %s" name_cond2, sp " (Si la condition n'est *pas* respectée, GOTO %s)" name_cond2);
-     (sp "jmpq %s" name_cond1, sp " (Si la condition est respectée, GOTO %s" name_cond2)]
+     (sp "jmp %s" name_cond1, sp " (Si la condition est respectée, GOTO %s" name_cond2)]
     []
   
 (* ******** Condition ******** *)
@@ -555,7 +554,7 @@ let asm_condition_part1 func asm_bloc src dest_asm1 dest_asm2 =
      (sp "movq %s, %%r13" src_s," (Sauvegarde en registres)");
      ("cmpq $0, %r13", " (Comparaison)");
      (sp "je %s" dest_asm2, sp " (Si la condition n'est *pas* respectée, GOTO %s)" dest_asm2);
-    (sp "jmpq %s" dest_asm1, sp " (Si la condition est respectée, GOTO %s)" dest_asm1)]
+    (sp "jmp %s" dest_asm1, sp " (Si la condition est respectée, GOTO %s)" dest_asm1)]
     []
 
 (* ******** While loop ******** *)
@@ -565,7 +564,7 @@ let asm_while_part1 cond_asm_bloc return_addr main_asm_name after_asm_name =
   cond_asm_bloc#add_content_d
     [(sp "cmp $0,%s" return_s," (Compare the condition with 0)");
      (sp "je %s" after_asm_name, " (Avoid the inside code if the condition is false");
-     (sp "jmpq %s" main_asm_name, " (If the condition is true then go in main_asm_name")]
+     (sp "jmp %s" main_asm_name, " (If the condition is true then go in main_asm_name")]
     []
 
 
@@ -1088,11 +1087,10 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
           (asm_jmp (Global after_asm_bloc_name))
           []
       in
-      pr "Asm_bloc in condition : %s\n" asm_bloc#get_block_name;
-      pr "List.lenght %d !\n" (List.length asm_bloc_cond1#get_before_anything);
+      let (_,_) = asm_block_of_code func code3 env2 func_env asm_bloc_cond2 in
       asm_bloc#add_block_after asm_bloc_cond1;
       asm_bloc#add_block_after asm_bloc_cond2;
-      let (_,_) = asm_block_of_code func code2 env2 func_env asm_bloc_cond2 in
+
       (* Build the after bloc *)
       let asm_bloc_after =
         new asm_block after_asm_bloc_name
