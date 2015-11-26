@@ -718,6 +718,9 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     end
   | OP2 (op, (loc1, expr1), (loc2, expr2)) ->
     begin
+      (* The C-- semantic evaluate from right to left, so I switch the
+         arguments *)
+      let (loc1,expr1,loc2,expr2) = (loc2,expr2,loc1,expr1) in
       (** OP2(bop,e,e') dénote e*e', e/e', e%e',
                              e+e', e-e', ou e[e']. *)
       (* On évalue les expressions *)
