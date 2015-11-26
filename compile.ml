@@ -495,7 +495,7 @@ let general_comp comp_command func asm_bloc x y dest =
   let after_bloc_name = genlab func in
   (* Put to 0 the dest_s, if the jump is done dest_s will become 1 *)
   asm_bloc#add_content_d
-    [("", sp "Comparaison %s < %s, result in %s" x_s y_s dest_s);
+    [("", sp "Comparaison %s <-> %s, result in %s" x_s y_s dest_s);
      (sp "movq %s, %%r13" x_s, " (Passage dans les registres)");
      (sp "movq %s, %%r14" y_s, " (Passage dans les registres)");
      (sp "movq $0, %%r15", " (On mets à 0 le resultat, valeur par defaut)");
@@ -840,18 +840,18 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     begin
       (** CMP(cop,e,e') vaut e<e', e<=e', ou e==e' *)
       (* On évalue les expressions *)
-      let (env1, expr1_addr) =
-        try
-          asm_block_of_expr func expr1 env func_env asm_bloc
-        with Uncomplete_compilation_error er -> compile_raise loc1 er
-      in
       let (env2, expr2_addr) =
         try
-          asm_block_of_expr func expr1 env1 func_env asm_bloc
+          asm_block_of_expr func expr2 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
+      let (env3, expr1_addr) =
+        try
+          asm_block_of_expr func expr1 env2 func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc1 er
+      in
       (* Ajoute adresse temporaire pour le resultat *)
-      let new_env = env2#add asm_bloc "" in
+      let new_env = env3#add asm_bloc "" in
       let result_addr = new_env#get "" in
       match op with
         C_LT ->
