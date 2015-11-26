@@ -308,12 +308,12 @@ let asm_call_mv_arg asm_bloc env src n_arg =
   else
     begin
       let new_env = env#add asm_bloc "" in
-      let dest_s = env#gets "" in
+      let dest_s = new_env#gets "" in
       asm_bloc#add_content_d
         [(sp "movq %s, %%r13" src_s, sp " (Argument %d en registre)" n_arg);
          (sp "movq %%r13, %s" dest_s, sp " (Argument %d sur la pile)" n_arg)]
         [];
-      (new_env, n_arg - 1)
+      (new_env, n_arg-1)
     end
 
 let asm_call_call f_name =
@@ -576,7 +576,6 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       let str = String.escaped str in
       let bloc_name = genlab "GLOB" in
       let var_asm_bloc =
-        (* TODO : check that escaped string are ok *)
         new asm_block bloc_name
           [(sp ".string \"%s\"" str," (Set a default value of 0)")]
           []
@@ -635,6 +634,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     end
   | CALL (f_name, loc_expr_l) -> (** appel de fonction f(e1,...,en) *)
     begin
+      
       let (end_env, rev_end_addr_list) =
         List.fold_left (fun (curr_env, addr_list) (locn, exprn) ->
             let (new_env, new_addr) = asm_block_of_expr func exprn curr_env func_env asm_bloc in
@@ -646,9 +646,10 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       (* TODO : aligner les éléments *)
       let (before_call_env, _) = List.fold_left
           (fun (tmp_env, n_arg) src ->
+             Printf.printf "==> end : %d\n" n_arg;
              asm_call_mv_arg asm_bloc tmp_env src n_arg
           )
-          (end_env, n)
+          (end_env, (n))
           end_addr_list
       in
       (* Appel de la fonction *)
@@ -718,21 +719,18 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     end
   | OP2 (op, (loc1, expr1), (loc2, expr2)) ->
     begin
-      (* The C-- semantic evaluate from right to left, so I switch the
-         arguments *)
-      let (loc1,expr1,loc2,expr2) = (loc2,expr2,loc1,expr1) in
       (** OP2(bop,e,e') dénote e*e', e/e', e%e',
                              e+e', e-e', ou e[e']. *)
       (* On évalue les expressions *)
-      let (env1, expr1_addr) =
+      let (env1, expr2_addr) =
         try
-          asm_block_of_expr func expr1 env func_env asm_bloc
-        with Uncomplete_compilation_error er -> compile_raise loc1 er
-      in
-      let (env2, expr2_addr) =
-        try
-          asm_block_of_expr func expr2 env1 func_env asm_bloc
+          asm_block_of_expr func expr2 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
+      in
+      let (env2, expr1_addr) =
+        try
+          asm_block_of_expr func expr1 env1 func_env asm_bloc
+        with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       (* Ajoute adresse temporaire pour le resultat *)
       let new_env = env2#add asm_bloc "" in
