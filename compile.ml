@@ -23,9 +23,6 @@ let rec gen_list a b =
 
 (* TODO
    Function :
-   - gérer cas particuliers types malloc/retours en 32 bits
-   Les fonctions C retournent en 32 bits ==> movslq %eax, %rax!
-
    NULL défini dans libc ?
    Deal with the result of (fact(5), 5)
 
@@ -230,6 +227,8 @@ class env my_map offset return_address =
     method get_return_address = current_return_address
     method update_return_address address =
       new env map current_offset address
+    method mem key =
+      Str_map.mem key my_map
   end
 
 
@@ -347,9 +346,13 @@ let asm_call_mv_arg asm_bloc env src n_arg =
 let asm_call_call f_name =
   [(sp "callq %s" f_name, " (Appel de la fonction)")]
 
-let asm_call_save_result dst =
+let asm_call_save_result is_64 dst =
   let dst_s = string_of_address dst in
-  [(sp "movq %%rax,%s" dst_s," (Save the result of the function)")]
+  if is_64 then
+    [(sp "movq %%rax,%s" dst_s," (Save the result of the function)")]
+  else
+    [("movslq %eax, %rax","Convert the result in 32 bits");
+     (sp "movq %%rax,%s" dst_s," (Save the result of the function)")]
 
 (******** Opérators with one argument *********)
 
@@ -587,7 +590,6 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       try
         (env, env#get var_name)
       with Not_found -> (pr "Warning : The variable %s isn't declared in the file. I hope it's defined in libc...\n" var_name; (env, Stdlib var_name))
-      (* with Not_found ->(raise (Uncomplete_warning (sp "The variable %s doesn't exists." var_name))) *)
     end
   | CST n ->
     let new_env = env#add asm_bloc "" in
@@ -727,7 +729,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       let after_call_env = end_env#add asm_bloc "" in
       let dst = after_call_env#get "" in
       asm_bloc#add_content_d
-        (asm_call_save_result dst)
+        (asm_call_save_result (List.mem f_name ["malloc"; "realloc"; "calloc"] || func_env#mem f_name) dst)
         [];
       (after_call_env, dst)
     end
