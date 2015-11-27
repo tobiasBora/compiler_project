@@ -24,12 +24,15 @@ let rec gen_list a b =
 (* TODO
    Function :
    - gérer cas particuliers types malloc/retours en 32 bits
+   Les fonctions C retournent en 32 bits ==> movslq %eax, %rax!
 
+   NULL défini dans libc ?
    Deal with the result of (fact(5), 5)
 
+   Deal with the memory leak in for(;;). Idea : pop after push
+   
    Easter Eggs
 
-   Les fonctions C retournent en 32 bits ==> movslq %eax, %rax!
 *)
 
 
@@ -38,6 +41,9 @@ let rec gen_list a b =
 (* =================== *)
 exception Compilation_error of string
 exception Uncomplete_compilation_error of string
+exception Warning of string
+exception Uncomplete_warning of string
+    
 let compile_raise loc precision =
   let (fn,l1,c1,l2,c2) = loc in
   raise (Compilation_error
@@ -57,13 +63,14 @@ type label = string
    (Global) or in the stack, in function of the base pointer. For example
    the value "Local_bp (-5)" means that it's 5 bytes before the position
    of the base pointer *)
-type address = Global of label | Local_bp of int | String of label | Register of string
+type address = Global of label | Local_bp of int | String of label | Register of string | Stdlib of string
 
 let string_of_address address = match address with
     Global lbl -> lbl
   | Local_bp n -> sp "%d(%%rbp)" (8*n)
   | String lbl -> "$" ^ lbl
   | Register s -> sp "%%%s" s
+  | Stdlib s -> sp "%s(%%rip)" s
 
 let address_of_argument n_arg = match n_arg with
     1 -> Register "rdi"
@@ -176,7 +183,7 @@ let asm_push_empty var_name current_offset =
   [("pushq $0", sp " Push an empty value on the stack to store the variable \"%s\" at the pos [%d]." var_name (8*current_offset))]
 
 let asm_pop_nowhere () =
-  [("add %rsp, $8", "Remove an element from the stack")]
+  [("add $8, %rsp", "Remove an element from the stack")]
 
 
 
@@ -209,7 +216,8 @@ class env my_map offset return_address =
         the value *)
     method add (asm_block : asm_block) var_name =
       (* When a variable is pushed, you need to pop it later *)
-      asm_block#add_content_d (asm_push_empty var_name current_offset) [];
+      asm_block#add_content_d (asm_push_empty var_name current_offset)
+        [];
         (* (asm_pop_nowhere ()); *)
       let new_address = Local_bp (current_offset) in
       new env (Str_map.add var_name new_address my_map) (current_offset - 1) new_address
@@ -578,7 +586,8 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     begin
       try
         (env, env#get var_name)
-      with Not_found -> raise (Uncomplete_compilation_error (sp "The variable %s doesn't exists." var_name))
+      with Not_found -> (pr "Warning : The variable %s isn't declared in the file. I hope it's defined in libc...\n" var_name; (env, Stdlib var_name))
+      (* with Not_found ->(raise (Uncomplete_warning (sp "The variable %s doesn't exists." var_name))) *)
     end
   | CST n ->
     let new_env = env#add asm_bloc "" in
@@ -1007,7 +1016,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
               List.fold_left
                 (fun (tmp_env,pos) var_name ->
                    (tmp_env#addf var_name (Local_bp pos), pos+1))
-                (env,1)
+                (env,2)
                 last_args_s in
             (* Put the firsts arguments *)
             let (env2,_) =
@@ -1182,12 +1191,26 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
       (env,func_env)
     end
 
+(* Return env *)
+let add_global_var asm_bloc env (var_name,value) =
+  let var_asm = new asm_block var_name [(sp ".long %d" value, "")] [] [] in
+  var_asm#set_before_anything
+    [(".data", sp "Define the global variable %s" var_name);
+     (".align 8","")];
+  asm_bloc#add_block_before var_asm;
+  env#addf var_name (Global var_name)
+
+
 (* =================== *)
 (* === Compilation === *)
 (* =================== *)
 let compile out decl_list =
   let env = new env Str_map.empty (-1) (Local_bp 0) in
-  let asm_bloc = new asm_block ".EVERYTHING" [] [] [] in
+  let asm_bloc =  new asm_block ".EVERYTHING" [] [] [] in
   asm_bloc#set_before_anything [(".global main", "Usefull to make main available for everyone")];
-  ignore(asm_block_of_code "" (CBLOCK (decl_list, [])) env env asm_bloc);
+  let env2 = List.fold_left (add_global_var asm_bloc) env
+      [("NULL",0)]
+  in
+  (* Main run *)
+  ignore(asm_block_of_code "" (CBLOCK (decl_list, [])) env2 env asm_bloc);
   Printf.fprintf out "%s" asm_bloc#get_content_string
