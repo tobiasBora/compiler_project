@@ -24,8 +24,6 @@ let rec gen_list a b =
 (* TODO
    Tableaux
    Function :
-   - appeller (fprintf)
-   - être appeller
    - gérer cas particuliers types malloc/retours en 32 bits
 
 
@@ -889,9 +887,15 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       (* Add jump condition in the main bloc *)
       asm_eif_part1 asm_bloc expr1_addr name_cond1 name_cond2;
       (* Create the three others blocs *)
-      let cond1_asm_bloc = new asm_block name_cond1 [] [] [] in
-      let cond2_asm_bloc = new asm_block name_cond2 [] [] [] in
-      let after_asm_bloc = new asm_block name_cond2 [] [] [] in
+      let cond1_asm_bloc =
+        new asm_block name_cond1
+          [("",sp "If the ternary condition in %s is respected" asm_bloc#get_block_name)] [] [] in
+      let cond2_asm_bloc =
+        new asm_block name_cond2
+          [("",sp "If the ternary condition in %s is *not* respected" asm_bloc#get_block_name)] [] [] in
+      let after_asm_bloc =
+        new asm_block name_after
+          [("",sp "This bloc is the one run after the ternary condition in bloc %s." asm_bloc#get_block_name)] [] [] in
       (* First one *)
       let (_,cond1_return) =
         try
@@ -920,6 +924,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     end
   | ESEQ l_expr ->
     begin
+      pr "SSSSSSSSEEEEEEEEEEQQQQQQQQQQQQ !!!\n";
       (** e1, ..., en [sequence, analogue a e1;e2 au niveau code];
           si n=0, represente skip. *)
       match l_expr with
