@@ -22,10 +22,10 @@ let rec gen_list a b =
     []
 
 (* TODO
-   Tableaux
    Function :
    - gérer cas particuliers types malloc/retours en 32 bits
 
+   Deal with the result of (fact(5), 5)
 
    Easter Eggs
 
@@ -281,15 +281,15 @@ let mv_variable src dest =
    (sp "movq %s,%%r13" src_s, "");
    (sp "movq %%r13,%s" dest_s, "")]
 
-let mv_into_array src index dest = 
+let mv_into_array src dest index = 
   let src_s = string_of_address src in
   let index_s = string_of_address index in
   let dest_s = string_of_address dest in
   [("", sp "%s[%s] := %s" dest_s index_s src_s);
-   (sp "movq %s,%%r13" src_s,"");
+   (sp "movq %s,%%r15" src_s, "");
+   (sp "movq %s,%%r13" dest_s,"");
    (sp "movq %s,%%r14" index_s,"");
-   (sp "movq (%%r13, %%r14, 8), %%r14","");
-   (sp "movq %%r14, %s" dest_s, "")]
+   (sp "movq %%r15, (%%r13, %%r14, 8)","")]
 
 let mv_arg_into_stack n_arg dest =
   let dest_s = string_of_address dest in
@@ -642,7 +642,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
         let dest_addr = new_env2#get var_name in
         (* var_name[xxx] <- yyy *)
         asm_bloc#add_content_d
-          (mv_into_array src_addr index_addr dest_addr)
+          (mv_into_array src_addr dest_addr index_addr)
           [];
         (* Check : it may works if you just give env instead of new_env, *)
         (* but optimisations are for later. *)
