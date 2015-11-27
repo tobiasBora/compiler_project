@@ -935,25 +935,17 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     end
   | ESEQ l_expr ->
     begin
-      pr "SSSSSSSSEEEEEEEEEEQQQQQQQQQQQQ !!!\n";
       (** e1, ..., en [sequence, analogue a e1;e2 au niveau code];
           si n=0, represente skip. *)
-      match l_expr with
-        [] -> (env, Local_bp 0)
-      | (loc1,expr1)::r ->
-        begin
-          let (env1, expr1_addr) =
+      List.fold_left
+        ( fun (env1,_) (loc1, expr1) ->
             try
-              asm_block_of_expr func expr1 env func_env asm_bloc
+              asm_block_of_expr func expr1 env1 func_env asm_bloc
             with Uncomplete_compilation_error er -> compile_raise loc1 er
-          in
-          asm_block_of_expr func (ESEQ r) env1 func_env asm_bloc
-        end
+        )
+        (env, Local_bp 0)
+        l_expr
     end
-
-
-
-
 
 (*
 func is "" if we are not in a function, else it contains the name of
