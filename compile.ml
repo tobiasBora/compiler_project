@@ -21,15 +21,53 @@ let rec gen_list a b =
   else 
     []
 
+(* This function is usefull to be able to put accent.
+   I cannot use String.escaped because it escape in
+   decimal while I need here octal.
+*)
+let octal_escaped s =
+  let count = ref 0 in
+  let len = String.length s in
+  for i = 0 to len - 1 do
+    match s.[i] with
+    | '\n' | '"' | '\\' ->
+      count := !count + 1
+    | c when c < ' ' || c > '\x7F' ->
+      count := !count + 3
+    | _ -> ()
+  done;
+  if !count = 0 then s
+  else
+    let s' = Bytes.create (len + !count) in
+    let j = ref 0 in
+    for i = 0 to len - 1 do
+      match s.[i] with
+      | '"' | '\\' as c ->
+        Bytes.set s' (!j + 0) '\\';
+        Bytes.set s' (!j + 1) c;
+        j := !j + 2
+      | '\n' ->
+        Bytes.set s' (!j + 0) '\\';
+        Bytes.set s' (!j + 1) 'n';
+        j := !j + 2
+      | c when c < ' ' || c > '\x7F' ->
+        let c = Char.code c in
+        Bytes.set s' (!j + 0) '\\';
+        Bytes.set s' (!j + 1) Char.(unsafe_chr (code '0' + (c / 64) land 0x7));
+        Bytes.set s' (!j + 2) Char.(unsafe_chr (code '0' + ( c / 8) land 0x7));
+        Bytes.set s' (!j + 3) Char.(unsafe_chr (code '0' + (     c) land 0x7));
+        j := !j + 4
+      | c ->
+        Bytes.set s' !j c;
+        incr j
+    done;
+    s';;
+
+
 (* TODO
    Function :
-   NULL défini dans libc ?
-   Deal with the result of (fact(5), 5)
-
-   Deal with the memory leak in for(;;). Idea : pop after push
-   
    Easter Eggs
-
+   Automatiquely add return at the end of the functions
 *)
 
 
@@ -68,6 +106,7 @@ let string_of_address address = match address with
   | String lbl -> "$" ^ lbl
   | Register s -> sp "%%%s" s
   | Stdlib s -> sp "%s(%%rip)" s
+  (* | Array (root_addr, ) *)
 
 let address_of_argument n_arg = match n_arg with
     1 -> Register "rdi"
@@ -213,10 +252,15 @@ class env my_map offset return_address =
         the value *)
     method add (asm_block : asm_block) var_name =
       (* When a variable is pushed, you need to pop it later *)
-      asm_block#add_content_d (asm_push_empty var_name current_offset)
-        [];
-        (* (asm_pop_nowhere ()); *)
       let new_address = Local_bp (current_offset) in
+      let new_address_s = string_of_address new_address in
+      asm_block#add_content_d
+        [(sp "movq $0, %s" new_address_s ,sp "On mets 0 par défaut dans la variable \"%s\"" var_name);
+         (sp "leaq %s, %%rsp" new_address_s, "On bouge le stack pointer pour être sûr de ne pas écraser la variable \"%s\" par la suite")]
+        (* (asm_push_empty var_name current_offset) *)
+        (* []; *)
+        [(sp "leaq %s, %%rsp" (string_of_address (Local_bp (current_offset+1))), sp "On dé-initilise la variable %s." var_name)];
+        (* (asm_pop_nowhere ()); *)
       new env (Str_map.add var_name new_address my_map) (current_offset - 1) new_address
     (** This function automatiquely get the address
         (next available in the stack). Use var_name = "" if the variable
@@ -377,45 +421,41 @@ let not_bit_a_bit src dest =
 
 (* Here the src variable is incremented, but a copy the first result
    is made in dest *)
-let post_inc src dest =
-  let src_s = string_of_address src in
-  let dest_s = string_of_address dest in 
-  [("", sp "(%s)++   (resultat temporaire dans %s)" src_s dest_s);
-   (sp "movq %s, %%r13" src_s, " (Passage dans les registres)");
-   (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
-   ("addq $1,%r13", " (On incrémente en registre)");
-   (sp "movq %%r13, %s" src_s, " (On modifie la valeur initiale sur la pile)")]
+let post_inc (src_get,src_set) dest =
+  let dest_s = string_of_address dest in
+  ([("", "Post inc")]
+   @ src_get
+   @ [(sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
+      ("addq $1,%r13", " (On incrémente en registre)")]
+   @ src_set)
 
 (* Same as above, but the old value isn't kept *)
-let pre_inc src dest =
-  let src_s = string_of_address src in
-  let dest_s = string_of_address dest in 
-  [("", sp "++(%s)  , resultat temporaire dans %s" src_s dest_s);
-   (sp "movq %s, %%r13" src_s, " (Passage dans les registres)");
-   ("addq $1,%r13", " (On incrémente en registre)");
-   (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
-   (sp "movq %%r13, %s" src_s, " (On modifie la valeur initiale sur la pile)")]
+let pre_inc (src_get,src_set) dest =
+  let dest_s = string_of_address dest in
+  ([("", "Pre inc")]
+   @ src_get
+   @ [ ("addq $1,%r13", " (On incrémente en registre)");
+       (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)")]
+   @ src_set)
 
 (* Here the src variable is incremented, but a copy the first result
    is made in dest *)
-let post_dec src dest =
-  let src_s = string_of_address src in
-  let dest_s = string_of_address dest in 
-  [("", sp "(%s)--   (resultat temporaire dans %s)" src_s dest_s);
-   (sp "movq %s, %%r13" src_s, " (Passage dans les registres)");
-   (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
-   ("subq $1,%r13", " (On incrémente en registre)");
-   (sp "movq %%r13, %s" src_s, " (On modifie la valeur initiale sur la pile)")]
+let post_dec (src_get,src_set) dest =
+  let dest_s = string_of_address dest in
+  ([("", "Post decrementation")]
+   @ src_get
+   @ [(sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
+      ("subq $1,%r13", " (On incrémente en registre)")]
+   @ src_set)
 
 (* Same as above, but the old value isn't kept *)
-let pre_dec src dest =
-  let src_s = string_of_address src in
-  let dest_s = string_of_address dest in 
-  [("", sp "--(%s)  , resultat temporaire dans %s" src_s dest_s);
-   (sp "movq %s, %%r13" src_s, " (Passage dans les registres)");
-   ("subq $1,%r13", " (On incrémente en registre)");
-   (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)");
-   (sp "movq %%r13, %s" src_s, " (On modifie la valeur initiale sur la pile)")]
+let pre_dec (src_get,src_set) dest =
+  let dest_s = string_of_address dest in
+  ([("", "Pre decrementation")]
+   @ src_get
+   @ [ ("subq $1,%r13", " (On incrémente en registre)");
+       (sp "movq %%r13, %s" dest_s, " (Sauvegarde ancienne valeur)")]
+   @ src_set)
 
 (* Binary operators *)
 (* NB : The code could be factorised, but I don't think it's
@@ -571,25 +611,43 @@ let asm_condition_part1 func asm_bloc src dest_asm1 dest_asm2 =
 let asm_while_part1 cond_asm_bloc return_addr main_asm_name after_asm_name =
   let return_s = string_of_address return_addr in
   cond_asm_bloc#add_content_d
-    [(sp "cmp $0,%s" return_s," (Compare the condition with 0)");
-     (sp "je %s" after_asm_name, " (Avoid the inside code if the condition is false");
-     (sp "jmp %s" main_asm_name, " (If the condition is true then go in main_asm_name")]
+    [(sp "cmp $0,%s" return_s," (Compare the condition with 0)")]
     []
 
 
 (* ================== *)
 (* === Convertion === *)
 (* ================== *)
+
+(* Equivalent of |-&, it gives to an expression it's address when it
+   has a meaning *)
+(* let get_addr_of_expr expr env = match expr with *)
+(*     VAR var_name -> env#get var_name *)
+(*   | OP2 (op, (loc1, expr1), (loc2, expr2)) -> *)
+(*     begin *)
+      
+(*     end *)
+(*   | _ -> Uncomplete_compilation_error "Sorry I don't have any address meaning for this expression (it must be a variable name or an array address)." *)
+
 (* Convert an expression into an asm bloc *)
 (* sweet family, family *)
-(* This return a couple (env, return_address) *)
-let rec asm_block_of_expr func expr env func_env asm_bloc =
+(* This return a couple (env, return_address, (real get code, real set code) option) *)
+let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((string * string) list) * ((string * string) list)) option) =
   match expr with
   | VAR var_name ->
     begin
       try
-        (env, env#get var_name)
-      with Not_found -> (pr "Warning : The variable %s isn't declared in the file. I hope it's defined in libc...\n" var_name; (env, Stdlib var_name))
+        let addr = env#get var_name in
+        let new_env = env#add asm_bloc "" in
+        let tmp_addr = new_env#get "" in
+        asm_bloc#add_content_d
+          (mv_variable addr tmp_addr)
+          [];
+        let real_s = string_of_address addr in
+        (new_env, tmp_addr,
+         Some ([(sp "movq %s, %%r13" real_s, sp "Read the real value of the var %s and put it in the registers." var_name )],
+               [(sp "movq %%r13, %s" real_s, sp " (On modifie la valeur initiale de %s sur la pile)" var_name)]))
+      with Not_found -> (pr "Warning : The variable %s isn't declared in the file. I hope it's defined in libc...\n" var_name; (env, Stdlib var_name, None))
     end
   | CST n ->
     let new_env = env#add asm_bloc "" in
@@ -598,12 +656,10 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     asm_bloc#add_content_d
       (mv_cte n new_address)
       [];
-    (new_env,
-     new_address
-    )
+    (new_env, new_address, None)
   | STRING str ->
     begin
-      let str = String.escaped str in
+      let str = octal_escaped str in
       let bloc_name = genlab "GLOB" in
       let var_asm_bloc =
         new asm_block bloc_name
@@ -615,13 +671,13 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
         [(".data",sp "Définir la chaine constante globale \"%s\"" str);
          (".align 8","")];
       asm_bloc#add_block_before var_asm_bloc;
-      (env, String bloc_name)
+      (env, String bloc_name, None)
     end
   | SET_VAR (var_name, (loc,expr1)) ->
     begin
       try
         (* xxx <- eval(expr)*)
-        let (env1, src_addr) =
+        let (env1, src_addr, _) =
           asm_block_of_expr func expr1 env func_env asm_bloc in
         (* Where is var_name ? *)
         let dest_addr = env#get var_name in
@@ -634,7 +690,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
           ((mv_variable src_addr dest_addr)
            @ (mv_variable src_addr return_value_addr))
           [];
-        (env2, return_value_addr)
+        (env2, return_value_addr, None)
       with
         Not_found -> compile_raise loc (sp "Var %s doesn't exists and cannot be assigned." var_name)
       | Uncomplete_compilation_error er -> compile_raise loc er
@@ -644,10 +700,10 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       try
         (* TODO : correct, it should work with pointers !!! *)
         (* xxx <- eval(expr1)*)
-        let (new_env1, index_addr) =
+        let (new_env1, index_addr, _) =
           asm_block_of_expr func expr1 env func_env asm_bloc in
         (* yyy <- eval(expr2)*)
-        let (new_env2, src_addr) =
+        let (new_env2, src_addr, _) =
           asm_block_of_expr func expr2 new_env1 func_env asm_bloc in
         (* Where is var_name ? *)
         let dest_addr = new_env2#get var_name in
@@ -657,7 +713,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
           [];
         (* Check : it may works if you just give env instead of new_env, *)
         (* but optimisations are for later. *)
-        (new_env2, dest_addr)
+        (new_env2, dest_addr, None)
       with
         Not_found -> compile_raise loc1 (sp "Var %s doesn't exists and cannot be assigned." var_name)
       | Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -666,7 +722,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
     begin
       let (end_env, rev_end_addr_list) =
         List.fold_left (fun (curr_env, addr_list) (locn, exprn) ->
-            let (new_env, new_addr) = asm_block_of_expr func exprn curr_env func_env asm_bloc in
+            let (new_env, new_addr, _) = asm_block_of_expr func exprn curr_env func_env asm_bloc in
             (new_env, new_addr::addr_list)) (env,[]) (List.rev loc_expr_l)
       in
       let end_addr_list = List.rev rev_end_addr_list in
@@ -731,13 +787,13 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       asm_bloc#add_content_d
         (asm_call_save_result (List.mem f_name ["malloc"; "realloc"; "calloc"] || func_env#mem f_name) dst)
         [];
-      (after_call_env, dst)
+      (after_call_env, dst, None)
     end
   | OP1 (op, (loc1, expr1)) ->
     (** OP1(mop, e) dénote -e, ~e, e++, e--, ++e, ou --e. *)
     begin
       (* On évalue l'expression *)
-      let (env1, expr1_addr) =
+      let (env1, expr1_addr, expr_1_real_addr) =
         try
           asm_block_of_expr func expr1 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -750,41 +806,52 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
         begin
           asm_bloc#add_content_d
             (minus expr1_addr result_addr) [];
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | M_NOT ->
         begin
           asm_bloc#add_content_d
             (not_bit_a_bit expr1_addr result_addr) [];
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
-      | M_POST_INC ->
+      | _ ->
         begin
-          asm_bloc#add_content_d
-            (post_inc expr1_addr result_addr) [];
-          (new_env, result_addr)
-        end
-      | M_PRE_INC ->
-        begin
-          (* Here the result_addr could be the same as the expr1,
-             but anyway *)
-          asm_bloc#add_content_d
-            (pre_inc expr1_addr result_addr) [];
-          (new_env, result_addr)
-        end
-      | M_POST_DEC ->
-        begin
-          asm_bloc#add_content_d
-            (post_dec expr1_addr result_addr) [];
-          (new_env, result_addr)
-        end
-      | M_PRE_DEC ->
-        begin
-          (* Here the result_addr could be the same as the expr1,
-             but anyway  *)
-          asm_bloc#add_content_d
-            (pre_dec expr1_addr result_addr) [];
-          (new_env, result_addr)
+          (* In this part the variable is modified if possible *)
+          let get_set_code =
+            match expr_1_real_addr with
+              None -> raise (Uncomplete_compilation_error "Sorry I don't have any address meaning for this expression (it must be a variable name or an array address).")
+            | Some g_s_code -> g_s_code
+          in
+          match op with
+            M_POST_INC ->
+            begin
+              asm_bloc#add_content_d
+                (post_inc get_set_code result_addr) [];
+              (new_env, result_addr, None)
+            end
+          | M_PRE_INC ->
+            begin
+              (* Here the result_addr could be the same as the expr1,
+                 but anyway *)
+              asm_bloc#add_content_d
+                (pre_inc get_set_code result_addr) [];
+              (new_env, result_addr, None)
+            end
+          | M_POST_DEC ->
+            begin
+              asm_bloc#add_content_d
+                (post_dec get_set_code result_addr) [];
+              (new_env, result_addr, None)
+            end
+          | M_PRE_DEC ->
+            begin
+              (* Here the result_addr could be the same as the expr1,
+                 but anyway  *)
+              asm_bloc#add_content_d
+                (pre_dec get_set_code result_addr) [];
+              (new_env, result_addr, None)
+            end
+          | _ -> raise (Uncomplete_compilation_error "The matching above isn't complete ???")
         end
     end
   | OP2 (op, (loc1, expr1), (loc2, expr2)) ->
@@ -792,12 +859,12 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       (** OP2(bop,e,e') dénote e*e', e/e', e%e',
                              e+e', e-e', ou e[e']. *)
       (* On évalue les expressions *)
-      let (env1, expr2_addr) =
+      let (env1, expr2_addr,_) =
         try
           asm_block_of_expr func expr2 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
-      let (env2, expr1_addr) =
+      let (env2, expr1_addr,_) =
         try
           asm_block_of_expr func expr1 env1 func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -810,51 +877,64 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
         begin
           asm_bloc#add_content_d
             (mult expr1_addr expr2_addr result_addr) [];
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | S_DIV ->
         begin
           asm_bloc#add_content_d
             (asm_div expr1_addr expr2_addr result_addr) [];
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | S_MOD ->
         begin
           asm_bloc#add_content_d
             (asm_mod expr1_addr expr2_addr result_addr) [];
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | S_ADD ->
         begin
           asm_bloc#add_content_d
             (asm_add expr1_addr expr2_addr result_addr) [];
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | S_SUB ->
         begin
           asm_bloc#add_content_d
             (asm_sub expr1_addr expr2_addr result_addr) [];
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | S_INDEX ->
         begin
           (* play with array ! *)
-          (* TODO : correct : it should work with pointers ! *)
           asm_bloc#add_content_d
             (asm_index expr1_addr expr2_addr result_addr) [];
-          (new_env, result_addr)
+          let expr1_addr_s = string_of_address expr1_addr in
+          let expr2_addr_s = string_of_address expr2_addr in
+          (new_env, result_addr,
+           Some (
+             [
+               (* Put the element in %r13 *)
+               (sp "movq %s,%%r14" expr1_addr_s, "Put the root in of the array memory");
+               (sp "movq %s,%%r15" expr2_addr_s, "Put the index in of the array memory");
+               ("movq (%r14, %r15, 8), %r13", "Put the element in memory")],
+             [
+               (* Get the value in %r13 and put it in the array *)
+               (sp "movq %s,%%r14" expr1_addr_s, "Put the root in of the array memory");
+               (sp "movq %s,%%r15" expr2_addr_s, "Put the index in of the array memory");
+               ("movq %r13, (%r14, %r15, 8)","Put the memory in the element")
+             ]))
         end
     end
   | CMP (op, (loc1,expr1), (loc2, expr2)) ->
     begin
       (** CMP(cop,e,e') vaut e<e', e<=e', ou e==e' *)
       (* On évalue les expressions *)
-      let (env2, expr2_addr) =
+      let (env2, expr2_addr,_) =
         try
           asm_block_of_expr func expr2 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
-      let (env3, expr1_addr) =
+      let (env3, expr1_addr,_) =
         try
           asm_block_of_expr func expr1 env2 func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -866,24 +946,24 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
         C_LT ->
         begin
           asm_lt func asm_bloc expr1_addr expr2_addr result_addr;
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | C_LE ->
         begin
           asm_le func asm_bloc expr1_addr expr2_addr result_addr;
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
       | C_EQ ->
         begin
           asm_eq func asm_bloc expr1_addr expr2_addr result_addr;
-          (new_env, result_addr)
+          (new_env, result_addr, None)
         end
     end
   | EIF ((loc1,expr1), (loc2, expr2), (loc3,expr3)) ->
     begin
       (** EIF(e1,e2,e3) est e1?e2:e3 *)
       (* We evaluate the expressions *)
-      let (env1, expr1_addr) =
+      let (env1, expr1_addr,_) =
         try
           asm_block_of_expr func expr1 env func_env asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -908,7 +988,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
         new asm_block name_after
           [("",sp "This bloc is the one run after the ternary condition in bloc %s." asm_bloc#get_block_name)] [] [] in
       (* First one *)
-      let (_,cond1_return) =
+      let (_,cond1_return,_) =
         try
           asm_block_of_expr func expr2 new_env func_env cond1_asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
@@ -918,7 +998,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
          @ (mv_gen "%r13" (string_of_address return_addr))
          @ (asm_jmp (Global name_after)));
       (* Second one *)
-      let (_,cond2_return) =
+      let (_,cond2_return,_) =
         try
           asm_block_of_expr func expr3 new_env func_env cond2_asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc3 er
@@ -931,19 +1011,19 @@ let rec asm_block_of_expr func expr env func_env asm_bloc =
       asm_bloc#add_block_after cond1_asm_bloc;
       asm_bloc#add_block_after cond2_asm_bloc;
       ignore(asm_bloc#fork_block after_asm_bloc);
-      (new_env, return_addr)
+      (new_env, return_addr, None)
     end
   | ESEQ l_expr ->
     begin
       (** e1, ..., en [sequence, analogue a e1;e2 au niveau code];
           si n=0, represente skip. *)
       List.fold_left
-        ( fun (env1,_) (loc1, expr1) ->
+        ( fun (env1,_,_) (loc1, expr1) ->
             try
               asm_block_of_expr func expr1 env1 func_env asm_bloc
             with Uncomplete_compilation_error er -> compile_raise loc1 er
         )
-        (env, Local_bp 0)
+        (env, Local_bp 0, None)
         l_expr
     end
 
@@ -1057,12 +1137,12 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
   | CEXPR (loc,expr) ->
     begin
       (** une expression e; vue comme instruction. *)
-      let (env2, _) = asm_block_of_expr func expr env func_env asm_bloc in
+      let (env2, _,_) = asm_block_of_expr func expr env func_env asm_bloc in
       (env2, func_env)
     end
   | CIF ((loc1, expr1), (loc2, code2), (loc3, code3)) ->
     begin
-      let (env2, return_addr) =
+      let (env2, return_addr,_) =
         try
           asm_bloc#add_content_d [("","DEBUT CONDITION")] [];
           asm_block_of_expr func expr1 env func_env asm_bloc
@@ -1127,9 +1207,10 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         new asm_block
           cond_asm_name
           [("",sp "Bloc de condition de la boucle while initialisé dans le bloc %s" asm_bloc#get_block_name)]
-          []
+          [(sp "je %s" after_asm_name, " (Avoid the inside code if the condition is false");
+           (sp "jmp %s" main_asm_name, " (If the condition is true then go in main_asm_name")]
           [] in
-      let (env2, return_addr) =
+      let (env2, return_addr,_) =
         try
           asm_block_of_expr func expr1 env func_env cond_asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -1140,16 +1221,13 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         new asm_block
           main_asm_name
           [("",sp "Bloc principal de while dont la condition est dans le bloc %s" cond_asm_name)]
-          []
+          (asm_jmp (Global cond_asm_name))
           [] in
       let (_, _) =
         try
           asm_block_of_code func code2 env2 func_env main_asm_bloc
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
-      main_asm_bloc#add_content_d
-        (asm_jmp (Global cond_asm_name))
-        [];
       (* The after code bloc *)
       let after_asm_bloc =
         new asm_block after_asm_name
@@ -1170,7 +1248,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         None -> (* Anything could be in %rax *) ()
       | Some (loc,expr) ->
         begin
-          let (env1, return_address) =
+          let (env1, return_address,_) =
             asm_block_of_expr func expr env func_env asm_bloc in
           let return_s = string_of_address return_address in
           asm_bloc#add_content_d
@@ -1193,7 +1271,6 @@ let add_global_var asm_bloc env (var_name,value) =
      (".align 8","")];
   asm_bloc#add_block_before var_asm;
   env#addf var_name (Global var_name)
-
 
 (* =================== *)
 (* === Compilation === *)
