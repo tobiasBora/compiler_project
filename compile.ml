@@ -1272,6 +1272,21 @@ let add_global_var asm_bloc env (var_name,value) =
   asm_bloc#add_block_before var_asm;
   env#addf var_name (Global var_name)
 
+(* ================== *)
+(* === Add return === *)
+(* ================== *)
+
+let add_return decl_list =
+  List.map
+    (function CDECL (x,y) -> CDECL (x,y)
+            | CFUN (loc,func_name,var_decl_l, (next_loc, code))
+              -> CFUN (loc, func_name, var_decl_l,
+                       (next_loc,
+                        CBLOCK ([],
+                                [(next_loc, code);
+                                 (next_loc, CRETURN None)]))))
+    decl_list
+
 (* =================== *)
 (* === Compilation === *)
 (* =================== *)
@@ -1282,6 +1297,7 @@ let compile out decl_list =
   let env2 = List.fold_left (add_global_var asm_bloc) env
       [("NULL",0)]
   in
+  let decl_list2 = add_return decl_list in
   (* Main run *)
-  ignore(asm_block_of_code "" (CBLOCK (decl_list, [])) env2 env asm_bloc);
+  ignore(asm_block_of_code "" (CBLOCK (decl_list2, [])) env2 env asm_bloc);
   Printf.fprintf out "%s" asm_bloc#get_content_string

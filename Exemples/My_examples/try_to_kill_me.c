@@ -16,6 +16,7 @@ int lots_args(int a, int b, int c, int d, int e, int f, int g, int h, int i)
      return(42);
 }
 
+
 int fact(int n)
 {
      if(n==0)
@@ -140,6 +141,9 @@ int main (int argc, char **argv)
      printf("Simple appel à printf : %d %d %d %d %d %d %d %d %d\n", 1,2,3,4,5,6,7,8,9);
      k=lots_args(1,2,3,4,5,6,7,8,9);
      printf("Retour de la grosse fonction : %s \n", (k=42)? chaine_ok :chaine_fail);
+     printf("Evaluation de droite à gauche : \n");
+     i=9;
+     lots_args(i--,i--,i--,i--,i--,i--,i--,i--,i--);
 
      
      printf("\n===== Essayer de faire planter la factorielle =====\n");
