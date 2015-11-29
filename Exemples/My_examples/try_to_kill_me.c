@@ -1,3 +1,10 @@
+#ifdef MCC
+#else
+#include <stdio.h>
+#include <stdlib.h>
+#endif
+
+
 int* chaine_ok;
 int* chaine_fail;
 int* glob_int_1;
@@ -26,6 +33,33 @@ int fact(int n)
      else
      {
 	  return(n*fact(n-1));
+     }
+}
+
+int jeux_plus_moins()
+{
+     int nombreMystere, nombreEntre, MAX, MIN;
+     nombreMystere = 0;
+     nombreEntre = malloc(8);
+     nombreEntre[0] = -1;
+     MAX = 100;
+     MIN = 1;
+     // Génération du nombre aléatoire
+     srand(time(NULL));
+     nombreMystere = (rand() % (MAX - MIN + 1)) + MIN;
+     /* La boucle du programme. Elle se répète tant que l'utilisateur n'a pas trouvé le nombre mystère */
+     while (nombreEntre[0] != nombreMystere)
+     {
+	  // On demande le nombre
+	  printf("Quel est le nombre mystère (réponse : %d) ? ", nombreMystere);
+	  scanf("%llu", nombreEntre);
+	  // On compare le nombre entré avec le nombre mystère
+	  if (nombreMystere > nombreEntre[0])
+	       printf("C'est plus !\n\n");
+	  else if (nombreMystere < nombreEntre[0])
+	       printf("C'est moins !\n\n");
+	  else
+	       printf ("Bravo, vous avez trouve le nombre mystere !!!\n\n");
      }
 }
 
@@ -67,9 +101,13 @@ int main (int argc, char **argv)
      printf("Inférieur large : %s\n", ((16<=30) && (10<=10) && (!(16<=15)))? chaine_ok : chaine_fail);
      printf("Supérieur stricte : %s\n", (((30>4)) && (!(5>5)))? chaine_ok : chaine_fail);
      printf("Supérieur large : %s\n", ((!(16>=30)) && (10>=10) && (16>=15))? chaine_ok : chaine_fail);
+     k=50;
+     i=60;
+     printf("Supérieur stricte v2 : %s\n", (i>k) ? chaine_ok : chaine_fail);
 
 
      printf("\n===== Opérateurs unaire =====\n");
+     k=477;
      printf("Moins 1 opérateur : %s\n", ((-k==-477) && (-k != 477)) ? chaine_ok : chaine_fail);
      printf("Negation logique : %s\n", (~k+k+1==0) ? chaine_ok : chaine_fail);
      printf("Test k non modifié : %s\n", (k==477) ? chaine_ok : chaine_fail);
@@ -215,7 +253,19 @@ int main (int argc, char **argv)
      printf("--tableau[n/2] étape 1 : %s\n", (--tableau[n/2] == (n/2)*(n/2)) ? chaine_ok : chaine_fail);
      printf("--tableau[n/2] étape 2 : %s\n", (tableau[n/2] == (n/2)*(n/2)) ? chaine_ok : chaine_fail);
      
+     printf("\n===== Scanf =====\n");
+     printf("Ecrivez le nombre 60 : \n");
+     scanf("%llu",tableau);
+     printf("60(:=%d) est supérieur à 50 : %s\n",tableau[0], (tableau[0]>50) ? chaine_ok : chaine_fail);
+     printf("Ecrivez le nombre 10 : \n");
+     scanf("%llu",tableau);
+     printf("10(:=%d) est inférieur à 50 : %s\n",tableau[0], (tableau[0]<50) ? chaine_ok : chaine_fail);
 
+     printf("\n===== Jeux du plus ou moins =====\n");
+     jeux_plus_moins();
+
+
+     
 
 
 /* while(fact(10,1,2,3,4,5,6,7,8),++i) */

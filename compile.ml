@@ -1,6 +1,9 @@
 open Cparse
 open Genlab
 
+(* If Ocaml version < 4.00 *)
+let (|>) a f = f a
+    
 let sp = Printf.sprintf
 let pr = Printf.printf
 
