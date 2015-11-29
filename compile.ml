@@ -71,13 +71,16 @@ let octal_escaped s =
 (* =================== *)
 exception Compilation_error of string
 exception Uncomplete_compilation_error of string
-    
-let compile_raise loc precision =
+
+let string_of_loc loc =
   let (fn,l1,c1,l2,c2) = loc in
-  raise (Compilation_error
-           (if l1 = l2 then
-              (sp "Compilation error in file %s, line %d, between column %d and %d (%s)." fn l1 c1 c2 precision)
-           else (sp "Compilation error in file %s, between line %d and %d, between column %d and %d (%s)." fn l1 l2 c1 c2 precision)))
+  if l1 = l2 then
+    sp "file %s, line %d, between column %d and %d" fn l1 c1 c2
+  else
+    sp "file %s, between line %d and %d, between column %d and %d" fn l1 l2 c1 c2
+
+let compile_raise loc precision =
+  raise (Compilation_error (sp "Compilation error in %s (%s)." (string_of_loc loc) precision))
 
 
 (* =============== *)
@@ -624,7 +627,7 @@ let asm_while_part1 cond_asm_bloc return_addr main_asm_name after_asm_name =
 (* Convert an expression into an asm bloc *)
 (* sweet family, family *)
 (* This return a couple (env, return_address, (real get code, real set code) option) *)
-let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((string * string) list) * ((string * string) list)) option) =
+let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * address * (((string * string) list) * ((string * string) list)) option) =
   match expr with
   | VAR var_name ->
     begin
@@ -639,7 +642,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
         (new_env, tmp_addr,
          Some ([(sp "movq %s, %%r13" real_s, sp "Read the real value of the var %s and put it in the registers." var_name )],
                [(sp "movq %%r13, %s" real_s, sp " (On modifie la valeur initiale de %s sur la pile)" var_name)]))
-      with Not_found -> (pr "\027[1;33mWarning\027[0;m : The variable %s isn't declared in the file. I hope it's defined in libc...\n" var_name; retsae var_name; (env, Stdlib var_name, None))
+      with Not_found -> (pr "\027[1;33mWarning\027[0;m : The variable %s isn't declared in %s. I hope it's defined in libc...\n" var_name (string_of_loc last_loc); retsae var_name; (env, Stdlib var_name, None))
     end
   | CST n ->
     let new_env = env#add asm_bloc "" in
@@ -670,7 +673,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       try
         (* xxx <- eval(expr)*)
         let (env1, src_addr, _) =
-          asm_block_of_expr func expr1 env func_env asm_bloc in
+          asm_block_of_expr func expr1 env func_env asm_bloc loc in
         (* Where is var_name ? *)
         let dest_addr = env#get var_name in
         (* The returned value isn't the dest_addr because it's possible
@@ -690,21 +693,21 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
   | SET_ARRAY (var_name, (loc1, expr1), (loc2, expr2)) -> (** affectation x[e]=e'. *)
     begin
       try
-        (* xxx <- eval(expr1)*)
-        let (new_env1, index_addr, _) =
-          asm_block_of_expr func expr1 env func_env asm_bloc in
         (* yyy <- eval(expr2)*)
-        let (new_env2, src_addr, _) =
-          asm_block_of_expr func expr2 new_env1 func_env asm_bloc in
+        let (env2, src_addr, _) =
+          asm_block_of_expr func expr2 env func_env asm_bloc loc2 in
+        (* xxx <- eval(expr1)*)
+        let (env3, index_addr, _) =
+          asm_block_of_expr func expr1 env2 func_env asm_bloc loc1 in
         (* Where is var_name ? *)
-        let dest_addr = new_env2#get var_name in
+        let dest_addr = env3#get var_name in
         (* var_name[xxx] <- yyy *)
         asm_bloc#add_content_d
           (mv_into_array src_addr dest_addr index_addr)
           [];
         (* Check : it may works if you just give env instead of new_env, *)
         (* but optimisations are for later. *)
-        (new_env2, dest_addr, None)
+        (env3, dest_addr, None)
       with
         Not_found -> compile_raise loc1 (sp "Var %s doesn't exists and cannot be assigned." var_name)
       | Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -713,7 +716,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
     begin
       let (end_env, rev_end_addr_list) =
         List.fold_left (fun (curr_env, addr_list) (locn, exprn) ->
-            let (new_env, new_addr, _) = asm_block_of_expr func exprn curr_env func_env asm_bloc in
+            let (new_env, new_addr, _) = asm_block_of_expr func exprn curr_env func_env asm_bloc locn in
             (new_env, new_addr::addr_list)) (env,[]) (List.rev loc_expr_l)
       in
       let end_addr_list = List.rev rev_end_addr_list in
@@ -786,7 +789,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       (* On évalue l'expression *)
       let (env1, expr1_addr, expr_1_real_addr) =
         try
-          asm_block_of_expr func expr1 env func_env asm_bloc
+          asm_block_of_expr func expr1 env func_env asm_bloc loc1
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       (* Ajoute adresse temporaire pour le resultat *)
@@ -852,12 +855,12 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       (* On évalue les expressions *)
       let (env1, expr2_addr,_) =
         try
-          asm_block_of_expr func expr2 env func_env asm_bloc
+          asm_block_of_expr func expr2 env func_env asm_bloc loc1
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
       let (env2, expr1_addr,_) =
         try
-          asm_block_of_expr func expr1 env1 func_env asm_bloc
+          asm_block_of_expr func expr1 env1 func_env asm_bloc loc2
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       (* Ajoute adresse temporaire pour le resultat *)
@@ -922,12 +925,12 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       (* On évalue les expressions *)
       let (env2, expr2_addr,_) =
         try
-          asm_block_of_expr func expr2 env func_env asm_bloc
+          asm_block_of_expr func expr2 env func_env asm_bloc loc2
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
       let (env3, expr1_addr,_) =
         try
-          asm_block_of_expr func expr1 env2 func_env asm_bloc
+          asm_block_of_expr func expr1 env2 func_env asm_bloc loc1
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       (* Ajoute adresse temporaire pour le resultat *)
@@ -956,7 +959,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       (* We evaluate the expressions *)
       let (env1, expr1_addr,_) =
         try
-          asm_block_of_expr func expr1 env func_env asm_bloc
+          asm_block_of_expr func expr1 env func_env asm_bloc loc1
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       (* Add a temp address to put the result in *)
@@ -981,7 +984,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       (* First one *)
       let (_,cond1_return,_) =
         try
-          asm_block_of_expr func expr2 new_env func_env cond1_asm_bloc
+          asm_block_of_expr func expr2 new_env func_env cond1_asm_bloc loc2
         with Uncomplete_compilation_error er -> compile_raise loc2 er
       in
       cond1_asm_bloc#add_ending_content_d
@@ -991,7 +994,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       (* Second one *)
       let (_,cond2_return,_) =
         try
-          asm_block_of_expr func expr3 new_env func_env cond2_asm_bloc
+          asm_block_of_expr func expr3 new_env func_env cond2_asm_bloc loc3
         with Uncomplete_compilation_error er -> compile_raise loc3 er
       in
       cond2_asm_bloc#add_ending_content_d
@@ -1011,7 +1014,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc : (env * address * (((
       List.fold_left
         ( fun (env1,_,_) (loc1, expr1) ->
             try
-              asm_block_of_expr func expr1 env1 func_env asm_bloc
+              asm_block_of_expr func expr1 env1 func_env asm_bloc loc1
             with Uncomplete_compilation_error er -> compile_raise loc1 er
         )
         (env, Local_bp 0, None)
@@ -1126,7 +1129,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
   | CEXPR (loc,expr) ->
     begin
       (** une expression e; vue comme instruction. *)
-      let (env2, _,_) = asm_block_of_expr func expr env func_env asm_bloc in
+      let (env2, _,_) = asm_block_of_expr func expr env func_env asm_bloc loc in
       (env2, func_env)
     end
   | CIF ((loc1, expr1), (loc2, code2), (loc3, code3)) ->
@@ -1134,7 +1137,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
       let (env2, return_addr,_) =
         try
           asm_bloc#add_content_d [("","DEBUT CONDITION")] [];
-          asm_block_of_expr func expr1 env func_env asm_bloc
+          asm_block_of_expr func expr1 env func_env asm_bloc loc1
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       (* --- Define new asm blocks names --- *)
@@ -1201,7 +1204,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
           [] in
       let (env2, return_addr,_) =
         try
-          asm_block_of_expr func expr1 env func_env cond_asm_bloc
+          asm_block_of_expr func expr1 env func_env cond_asm_bloc loc1
         with Uncomplete_compilation_error er -> compile_raise loc1 er
       in
       asm_while_part1 cond_asm_bloc return_addr main_asm_name after_asm_name;
@@ -1238,7 +1241,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
       | Some (loc,expr) ->
         begin
           let (env1, return_address,_) =
-            asm_block_of_expr func expr env func_env asm_bloc in
+            asm_block_of_expr func expr env func_env asm_bloc loc in
           let return_s = string_of_address return_address in
           asm_bloc#add_content_d
             [(sp "movq %s,%%rax" return_s, "Mets la valeur de retour de la fonction dans %rax")]
@@ -1291,6 +1294,6 @@ let compile out decl_list =
   try
     ignore(asm_block_of_code "" (CBLOCK (decl_list2, [])) env2 env asm_bloc);
     Printf.fprintf out "%s" asm_bloc#get_content_string;
-    pr "\027[1;32mCompilation ended with success\027[0;m\n"
-  with Compilation_error str -> (pr "\027[1;31mError\027[0;m : %s\n" str; exit 1)
-     | Uncomplete_compilation_error str -> (pr "\027[1;31mError\027[0;m : %s\n" str; exit 1)
+    pr "\027[1;32mThe compilation in asm ended with success\027[0;m\n%!"
+  with Compilation_error str -> (pr "\027[1;31mError\027[0;m : %s\n%!" str; exit 1)
+     | Uncomplete_compilation_error str -> (pr "\027[1;31mError\027[0;m : %s\n%!" str; exit 1)
