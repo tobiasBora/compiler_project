@@ -1,4 +1,4 @@
-* My C-- Compiler
+* My C- - Compiler
 This project is for a school project. The goal is to design a C-- compiler (you can find the semantic of C-- here (french, sorry about that) : [[http://www.lsv.ens-cachan.fr/~goubault/CoursProgrammation/prog1_sem1.pdf]])
 
 ** Compile the project
