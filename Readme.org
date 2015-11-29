@@ -1,0 +1,22 @@
+* My C-- Compiler
+This project is for a school project. The goal is to design a C-- compiler (you can find the semantic of C-- here (french, sorry about that) : [[http://www.lsv.ens-cachan.fr/~goubault/CoursProgrammation/prog1_sem1.pdf]])
+
+** Compile the project
+To download and compile the project, make sure you have ocaml installed :
+: sudo apt-get install ocaml
+
+Then just do :
+: git clone https://github.com/tobiasBora/compiler_project
+: cd compiler_project
+: make
+
+** Compile your own C-- file
+The mcc file given is the compiler. To run an example you can do for example
+: cd Exemples/My_example
+: ../../mcc try_to_kill_me.c
+: ./try_to_kill_me
+
+Please note that the integers are in 64 bits, so instead of using =%d= (in scanf or printf), prefer using =%llu= (if you don't, it works often, but can lead to some strange bug, especially with negative and big numbers).
+
+
+
