@@ -20,10 +20,10 @@
 #     use is subject to a specific license, obtainable from LSV.
 
 %.cmo: %.ml
-	ocamlc -c -g $<
+	ocamlc -g -c $<
 
 %.cmi: %.mli
-	ocamlc -c $<
+	ocamlc -g -c $<
 
 .PHONY: all projet.tar.gz
 
@@ -43,7 +43,7 @@ all: mcc
 projet: projet.tar.gz
 
 mcc: $(CAMLOBJS)
-	ocamlc -custom -o mcc unix.cma -cclib -lunix $(CAMLOBJS)
+	ocamlc -g -o mcc unix.cma $(CAMLOBJS)
 
 clean:
 	rm -f mcc *.cmi *.cmo
@@ -63,7 +63,19 @@ projet.tar.gz:
 	-mkdir $(PJ)/Exemples
 	cp Exemples/*.c $(PJ)/Exemples
 	cp cprint_skel.ml $(PJ)/cprint.ml
+	cp compile_skel.ml $(PJ)/compile.ml
 	tar -cvzf $@ $(PJ)
+
+P1=../squelette
+P2=../squelette_2
+p2_links:
+	@echo Populating $(P2) with links for missing files...
+	@mkdir -p $(P2)
+	@for f in $(FILES) compile_skel.ml cprint_skel.ml ; do \
+	  test -f $(P2)/$$f || (echo Linking $$f... ; ln $(P1)/$$f $(P2)/$$f) ; done
+	@mkdir -p $(P2)/Exemples
+	@for f in Exemples/*.c ; do \
+	  test -f $(P2)/$$f || (echo Linking $$f... ; ln $(P1)/$$f $(P2)/$$f) ; done
 
 ctab.ml: ctab.mly
 	ocamlyacc -v ctab.mly

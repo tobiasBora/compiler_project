@@ -1,3 +1,5 @@
+(* http://www.lsv.fr/~baelde/prog1/log_all.txt *)
+
 open Cparse
 open Genlab
 
@@ -27,6 +29,7 @@ let rec gen_list a b =
 (* This function is usefull to be able to put accent.
    I cannot use String.escaped because it escape in
    decimal while I need here octal.
+     XXX joli souci du détail
 *)
 let octal_escaped s =
   let count = ref 0 in
@@ -117,6 +120,9 @@ let address_of_argument n_arg = match n_arg with
 (* === Asm Blocks === *)
 (* ================== *)
 (* Idea : the blocs are asm code lists. You can add the code inside.
+ * XXX un peu plus de doc, ou un système un peu plus simple, aurait facilité
+ * ma lecture, mais en gros j'ai compris à l'usage comment ça marche et je
+ * vois que dans plusieurs cas ça fait des choses utiles
 *)
 
 class asm_block (block_name' : string) (beg_cont' : (string * string) list) (end_cont' : (string*string) list) (others_blocks_after' : asm_block list) =
@@ -227,7 +233,8 @@ type var_name = string
 (* type env = var_name -> address *)
 
 module Str_map = Map.Make(String)
-(* Here is a functionnal object (you cannot edit it) *)
+(* Here is a functionnal object (you cannot edit it)
+* XXX a more precise terminology : persistent *)
 class env my_map offset return_address =
   object(this)
     val map = my_map
@@ -253,9 +260,11 @@ class env my_map offset return_address =
       asm_block#add_content_d
         [(sp "movq $0, %s" new_address_s ,sp "On mets 0 par défaut dans la variable \"%s\"" var_name);
          (sp "leaq %s, %%rsp" new_address_s, "On bouge le stack pointer pour être sûr de ne pas écraser la variable \"%s\" par la suite")]
+        (* XXX OK, mais... pourquoi pas un simple addq/subq sur %rsp ? *)
         (* (asm_push_empty var_name current_offset) *)
         (* []; *)
         [(sp "leaq %s, %%rsp" (string_of_address (Local_bp (current_offset+1))), sp "On dé-initilise la variable %s." var_name)];
+        (* XXX OK *)
         (* (asm_pop_nowhere ()); *)
       new env (Str_map.add var_name new_address my_map) (current_offset - 1) new_address
     (** This function automatiquely get the address
@@ -284,6 +293,7 @@ class env my_map offset return_address =
    %rdi ==> Param 1
    %rbp ==> Inchangé après appel de fonction
    %rsp ==> Inchangé après appel de fonction, multiple de 16 avant appel via callq. On l'utilise en principe comme base à la place de rbp.
+                                                                                    XXX ah bon? ça n'a pas l'air d'être le cas (ouf)
 
    %r8 ==> Param 5
    %r9 ==> Param 6
@@ -328,15 +338,17 @@ let mv_variable src dest =
    (sp "movq %s,%%r13" src_s, "");
    (sp "movq %%r13,%s" dest_s, "")]
 
-let mv_into_array src dest index = 
+let mv_into_array src dest_var index dest = 
   let src_s = string_of_address src in
   let index_s = string_of_address index in
+  let dest_var_s = string_of_address dest_var in
   let dest_s = string_of_address dest in
-  [("", sp "%s[%s] := %s" dest_s index_s src_s);
+  [("", sp "%s[%s] := %s" dest_var_s index_s src_s);
    (sp "movq %s,%%r15" src_s, "");
-   (sp "movq %s,%%r13" dest_s,"");
+   (sp "movq %s,%%r13" dest_var_s,"");
    (sp "movq %s,%%r14" index_s,"");
-   (sp "movq %%r15, (%%r13, %%r14, 8)","")]
+   (sp "movq %%r15, (%%r13, %%r14, 8)","");
+   (sp "movq %%r15,%s" dest_s," Usefull when you have nested arrays")]
 
 let mv_arg_into_stack n_arg dest =
   let dest_s = string_of_address dest in
@@ -366,6 +378,10 @@ let asm_pop addr =
 let retsae rav =
   if rav = "\101\103\103\115"
   then
+    (* XXX ^^
+     *   j'avoue que j'ai mis un moment à me demander si je devais tester
+     *   ça, craignant que ce ne soit pas juste de l'ascii art mais peut
+     *   être un hack... j'espère que ce n'était pas le cas ;) *)
     pr "\027[1;32m\010\010\010\032\032\032\032\032\032\032\032\032\046\045\039\045\046\032\032\032\032\032\032\032\032\032\032\032\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\010\032\032\032\032\032\032\032\032\032\092\032\032\032\124\032\032\032\095\095\095\095\032\032\032\047\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\092\010\032\032\032\032\032\032\032\032\032\032\092\032\032\124\032\032\047\032\032\032\032\041\032\040\032\032\069\103\103s??\032\032Wh\101\114\101\032\116h\101\032h\101ll\032\032\041\010\032\032\032\032\032\032\032\032\032\032\032\092\032\124\032\047\032\046\045\039\034\032\032\032\092\095\032\032\032\032a\114\101\032my\032ca\114\114\111\116s?!\032\032\032\047\010\032\032\032\032\032\032\032\032\032\032\032\095\092\124\047\046\039\032\032\032\111\040\041\040\095\095\041\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\047\010\032\032\032\032\032\032\032\032\032\032\047\095\095\095\095\095\092\095\010\032\032\032\032\032\032\032\032\032\047\039\045\045\045\045\124\095\047\095\010\032\032\032\032\032\032\032\032\124\032\032\032\032\032\032\032\032\032\0320\010\032\032\032\032\032\032\032\032\032\092\032\032\032\032\095\095\058\058\047\032\095\032\032\032\032\095\095@\095\095\010\032\032\032\032\032\032\032\032\047\032\032\032\032\032\092\032\032H\032\040\095\041\032\032\047\032\095\032\032\095\092\010\032\032\032\032\032\032\032\047\032\032\032\032\040\095\124\095\045\045\045\124\095\047\032\047\095\040\095\041\040\095\041\092\010\032\032\032\032\032\032\047\032\032\092\095\095\095\095\032\032\092\046\045\039\032\032\047\040\095\041\040\095\041\040\095\041\092\032\032\032\032\032\032\045Dijks\116\101\114\045\010\032\032\095\032\032\047\032\032\032\032\032\032\032\041\092\095\047\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\047\032\092\047\032\032\047\032\032\032\040\047\095\032\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\092\095\047\092\095\040\095\095\095\095\095\095\095\041\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\034\034\034\034\034\034\034\034\034\034\034\034\034\027\010[5m\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\010\010\010\027[0;m"
       (* pr "\027[1;36m\010\010\010\032\032\032\032\032\032\032\032\032\046\045\039\045\046\032\032\032\032\032\032\032\032\032\032\032\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\010\032\032\032\032\032\032\032\032\032\092\032\032\032\124\032\032\032\095\095\095\095\032\032\032\047\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\092\010\032\032\032\032\032\032\032\032\032\032\092\032\032\124\032\032\047\032\032\032\032\041\032\040\032\032\101\103\103s??\032\032Wh\101\114\101\032\116h\101\032h\101ll\032\032\041\010\032\032\032\032\032\032\032\032\032\032\032\092\032\124\032\047\032\046\045\039\034\032\032\032\092\095\032\032\032\032a\114\101\032my\032ca\114\114\111\116s?!\032\032\032\047\010\032\032\032\032\032\032\032\032\032\032\032\095\092\124\047\046\039\032\032\032\111\040\041\040\095\095\041\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\047\010\032\032\032\032\032\032\032\032\032\032\047\095\095\095\095\095\092\095\010\032\032\032\032\032\032\032\032\032\047\039\045\045\045\045\124\095\047\095\010\032\032\032\032\032\032\032\032\124\032\032\032\032\032\032\032\032\032\0320\010\032\032\032\032\032\032\032\032\032\092\032\032\032\032\095\095\058\058\047\032\095\032\032\032\032\095\095@\095\095\010\032\032\032\032\032\032\032\032\047\032\032\032\032\032\092\032\032H\032\040\095\041\032\032\047\032\095\032\032\095\092\010\032\032\032\032\032\032\032\047\032\032\032\032\040\095\124\095\045\045\045\124\095\047\032\047\095\040\095\041\040\095\041\092\010\032\032\032\032\032\032\047\032\032\092\095\095\095\095\032\032\092\046\045\039\032\032\047\040\095\041\040\095\041\040\095\041\092\032\032\032\032\032\032\045Dijks\116\101\114\045\010\032\032\095\032\032\047\032\032\032\032\032\032\032\041\092\095\047\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\047\032\092\047\032\032\047\032\032\032\040\047\095\032\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\092\095\047\092\095\040\095\095\095\095\095\095\095\041\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\034\034\034\034\034\034\034\034\034\034\034\034\034\010\010\010\027[0;m" *)
   else ()
@@ -399,7 +415,7 @@ let asm_call_save_result is_64 dst =
   if is_64 then
     [(sp "movq %%rax,%s" dst_s," (Save the result of the function)")]
   else
-    [("movslq %eax, %rax","Convert the result in 32 bits");
+    [("movslq %eax, %rax","Convert the result in 32 bits"); (* XXX *from* 32 bits *)
      (sp "movq %%rax,%s" dst_s," (Save the result of the function)")]
 
 (******** Opérators with one argument *********)
@@ -700,14 +716,17 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
         let (env3, index_addr, _) =
           asm_block_of_expr func expr1 env2 func_env asm_bloc loc1 in
         (* Where is var_name ? *)
-        let dest_addr = env3#get var_name in
+        let dest_var_addr = env3#get var_name in
+
+        let env4 = env3#add asm_bloc "" in
+        let dest_addr = env4#get "" in
         (* var_name[xxx] <- yyy *)
         asm_bloc#add_content_d
-          (mv_into_array src_addr dest_addr index_addr)
+          (mv_into_array src_addr dest_var_addr index_addr dest_addr)
           [];
         (* Check : it may works if you just give env instead of new_env, *)
         (* but optimisations are for later. *)
-        (env3, dest_addr, None)
+        (env4, dest_addr, None)
       with
         Not_found -> compile_raise loc1 (sp "Var %s doesn't exists and cannot be assigned." var_name)
       | Uncomplete_compilation_error er -> compile_raise loc1 er
@@ -821,7 +840,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
             begin
               asm_bloc#add_content_d
                 (post_inc get_set_code result_addr) [];
-              (new_env, result_addr, None)
+              (new_env, result_addr, expr_1_real_addr)
             end
           | M_PRE_INC ->
             begin
@@ -829,13 +848,13 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
                  but anyway *)
               asm_bloc#add_content_d
                 (pre_inc get_set_code result_addr) [];
-              (new_env, result_addr, None)
+              (new_env, result_addr, expr_1_real_addr)
             end
           | M_POST_DEC ->
             begin
               asm_bloc#add_content_d
                 (post_dec get_set_code result_addr) [];
-              (new_env, result_addr, None)
+              (new_env, result_addr, expr_1_real_addr)
             end
           | M_PRE_DEC ->
             begin
@@ -843,7 +862,7 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
                  but anyway  *)
               asm_bloc#add_content_d
                 (pre_dec get_set_code result_addr) [];
-              (new_env, result_addr, None)
+              (new_env, result_addr, expr_1_real_addr)
             end
           | _ -> raise (Uncomplete_compilation_error "The matching above isn't complete ???")
         end
@@ -1038,6 +1057,9 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
             let var_asm =
               new asm_block var_name
                 [(".long 0", " (Set a default value of 0)")]
+                (* XXX devrait être un quad... mais comme tu alignes
+                 * sur 8 octets, je ne vois pas comment exploiter ça pour obtenir
+                 * un test incorrect! *)
                 []
                 []
             in
@@ -1056,7 +1078,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
       else if (try ignore(env#get func_name); true with _ -> false) then
         compile_raise loc (sp "The function %s has the same name as the global variable %s." func_name func_name)
       else if (try ignore(func_env#get func_name); true with _ -> false) then
-        compile_raise loc (sp "The function %s has already been defined." func_name)
+        compile_raise loc (sp "The function %s has already been defined" func_name)
       else
         begin
           (* Create a new label for the function *)
