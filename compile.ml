@@ -3,6 +3,81 @@
 open Cparse
 open Genlab
 
+(*
+=== Notation and definition ===
+   In my code, the variables whose name is ==my_variable_name== are global,
+   but not accessible for the user (a 'real' variable name cannot begin with
+   an equal sign). In the same idea, the variables that have the name
+   --my_variable_name-- are local variable name.
+
+   I will call "state" of a program the value of the registers
+   rsp (stack pointer) and rip (instruction pointer). I save it in local
+   variable (notation with --) and global variable (notation with ==) in
+   order to be able to give them to functions.
+   
+=== Deal with exceptions ===
+
+   To deal with exceptions, the idea I will use is that when I enter
+   into a try bloc, I will put in local variables the state of the
+   program, and then put a conditionnal jump. If a global variable
+   ==exception== is null, I jump in the content of the bloc, if it's
+   not I go in the "catch" statement. The first time I enter in such a
+   bloc, ==exception== will always have the value 0, but when an
+   exception will be raised, I will firstly set ==exception== to a not
+   null value (the value depends on the name of the exception), and
+   then jump back into the last try block that has been found by
+   restoring the state function. Like that, the conditionnal jump will
+   be accepted and the program will go in the catch statement.
+
+
+
+
+
+
+
+En pseudo code :
+
+Appel de fonction :
+   etat --> global
+   appel
+   global --> etat
+
+BLOC_1:
+   sauvegarder etat
+   creer --retour_bool-- et --retour_val--
+   si exc = 0 alors BLOC_try
+   sinon BLOC_exc
+
+BLOC_try:
+   bloc_classique
+     val de retour si existe dans --retour_val--
+       PUIS (au cas ou exception relancée) mettre --retour_bool-- à 1
+   bloc_finally
+   
+BLOC_exc:
+   restaurer ancien etat dans global
+   si exn = 1 alors bloc_exc_1
+   si exn = 2 alors bloc_exc_2
+   si exn = 3 alors bloc_exc_3
+   sinon bloc_finally
+
+
+bloc_exc_n:
+   mettre global exc à 0
+   contenu
+   bloc_finally
+
+bloc_finally:
+   contenu du bloc
+   si --retour_bool-- (vient de bloc_try) alors bloc_finally_return
+   si global exc non nul, alors relancer l'exception
+   sinon suite du bloc courant
+
+bloc_finally_return:
+   retourner --retour_val--
+   
+   *)
+
 (* If Ocaml version < 4.00 *)
 let (|>) a f = f a
     
@@ -233,8 +308,7 @@ type var_name = string
 (* type env = var_name -> address *)
 
 module Str_map = Map.Make(String)
-(* Here is a functionnal object (you cannot edit it)
-* XXX a more precise terminology : persistent *)
+(* Here is a persistent object (you cannot edit it) *)
 class env my_map offset return_address =
   object(this)
     val map = my_map
@@ -383,7 +457,6 @@ let retsae rav =
      *   ça, craignant que ce ne soit pas juste de l'ascii art mais peut
      *   être un hack... j'espère que ce n'était pas le cas ;) *)
     pr "\027[1;32m\010\010\010\032\032\032\032\032\032\032\032\032\046\045\039\045\046\032\032\032\032\032\032\032\032\032\032\032\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\010\032\032\032\032\032\032\032\032\032\092\032\032\032\124\032\032\032\095\095\095\095\032\032\032\047\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\092\010\032\032\032\032\032\032\032\032\032\032\092\032\032\124\032\032\047\032\032\032\032\041\032\040\032\032\069\103\103s??\032\032Wh\101\114\101\032\116h\101\032h\101ll\032\032\041\010\032\032\032\032\032\032\032\032\032\032\032\092\032\124\032\047\032\046\045\039\034\032\032\032\092\095\032\032\032\032a\114\101\032my\032ca\114\114\111\116s?!\032\032\032\047\010\032\032\032\032\032\032\032\032\032\032\032\095\092\124\047\046\039\032\032\032\111\040\041\040\095\095\041\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\047\010\032\032\032\032\032\032\032\032\032\032\047\095\095\095\095\095\092\095\010\032\032\032\032\032\032\032\032\032\047\039\045\045\045\045\124\095\047\095\010\032\032\032\032\032\032\032\032\124\032\032\032\032\032\032\032\032\032\0320\010\032\032\032\032\032\032\032\032\032\092\032\032\032\032\095\095\058\058\047\032\095\032\032\032\032\095\095@\095\095\010\032\032\032\032\032\032\032\032\047\032\032\032\032\032\092\032\032H\032\040\095\041\032\032\047\032\095\032\032\095\092\010\032\032\032\032\032\032\032\047\032\032\032\032\040\095\124\095\045\045\045\124\095\047\032\047\095\040\095\041\040\095\041\092\010\032\032\032\032\032\032\047\032\032\092\095\095\095\095\032\032\092\046\045\039\032\032\047\040\095\041\040\095\041\040\095\041\092\032\032\032\032\032\032\045Dijks\116\101\114\045\010\032\032\095\032\032\047\032\032\032\032\032\032\032\041\092\095\047\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\047\032\092\047\032\032\047\032\032\032\040\047\095\032\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\092\095\047\092\095\040\095\095\095\095\095\095\095\041\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\034\034\034\034\034\034\034\034\034\034\034\034\034\027\010[5m\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\010\010\010\027[0;m"
-      (* pr "\027[1;36m\010\010\010\032\032\032\032\032\032\032\032\032\046\045\039\045\046\032\032\032\032\032\032\032\032\032\032\032\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\010\032\032\032\032\032\032\032\032\032\092\032\032\032\124\032\032\032\095\095\095\095\032\032\032\047\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\092\010\032\032\032\032\032\032\032\032\032\032\092\032\032\124\032\032\047\032\032\032\032\041\032\040\032\032\101\103\103s??\032\032Wh\101\114\101\032\116h\101\032h\101ll\032\032\041\010\032\032\032\032\032\032\032\032\032\032\032\092\032\124\032\047\032\046\045\039\034\032\032\032\092\095\032\032\032\032a\114\101\032my\032ca\114\114\111\116s?!\032\032\032\047\010\032\032\032\032\032\032\032\032\032\032\032\095\092\124\047\046\039\032\032\032\111\040\041\040\095\095\041\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\095\047\010\032\032\032\032\032\032\032\032\032\032\047\095\095\095\095\095\092\095\010\032\032\032\032\032\032\032\032\032\047\039\045\045\045\045\124\095\047\095\010\032\032\032\032\032\032\032\032\124\032\032\032\032\032\032\032\032\032\0320\010\032\032\032\032\032\032\032\032\032\092\032\032\032\032\095\095\058\058\047\032\095\032\032\032\032\095\095@\095\095\010\032\032\032\032\032\032\032\032\047\032\032\032\032\032\092\032\032H\032\040\095\041\032\032\047\032\095\032\032\095\092\010\032\032\032\032\032\032\032\047\032\032\032\032\040\095\124\095\045\045\045\124\095\047\032\047\095\040\095\041\040\095\041\092\010\032\032\032\032\032\032\047\032\032\092\095\095\095\095\032\032\092\046\045\039\032\032\047\040\095\041\040\095\041\040\095\041\092\032\032\032\032\032\032\045Dijks\116\101\114\045\010\032\032\095\032\032\047\032\032\032\032\032\032\032\041\092\095\047\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\047\032\092\047\032\032\047\032\032\032\040\047\095\032\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\092\095\047\092\095\040\095\095\095\095\095\095\095\041\032\032\032\032\032\032\124\047\092\092\047\047\092\092\047\047\092\092\124\010\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\032\034\034\034\034\034\034\034\034\034\034\034\034\034\010\010\010\027[0;m" *)
   else ()
 
 
@@ -1309,7 +1382,16 @@ let compile out decl_list =
   let asm_bloc =  new asm_block ".EVERYTHING" [] [] [] in
   asm_bloc#set_before_anything [(".global main", "Usefull to make main available for everyone")];
   let env2 = List.fold_left (add_global_var asm_bloc) env
-      [("NULL",0)]
+      [("NULL",0);
+       (* These global variables are used to give value related to exceptions
+          at a function call.
+          I will use == for global variables and -- for local variables.
+          Since these symbols are forbidden in real variable name there
+          won't be any conflict.
+       *)
+       ("==last_rip==",0)
+       ("==last_==",0)
+      ]
   in
   let decl_list2 = add_return decl_list in
   (* Main run *)
