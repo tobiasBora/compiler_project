@@ -18,24 +18,43 @@ open Genlab
 === Deal with exceptions ===
 
    To deal with exceptions, the idea I will use is that when I enter
-   into a try bloc, I will put in local variables the state of the
-   program, and then put a conditionnal jump. If a global variable
-   ==exception== is null, I jump in the content of the bloc, if it's
-   not I go in the "catch" statement. The first time I enter in such a
-   bloc, ==exception== will always have the value 0, but when an
-   exception will be raised, I will firstly set ==exception== to a not
-   null value (the value depends on the name of the exception), and
-   then jump back into the last try block that has been found by
-   restoring the state function. Like that, the conditionnal jump will
-   be accepted and the program will go in the catch statement.
+   into a try bloc, I will put in local variables .last_try_rsp and
+   .last_try_rip the state of the program, and then put a
+   conditionnal jump. If a global variable .__exception_name__ is null, I
+   jump in the content of the bloc, if it's not I go in the "catch"
+   statement. The first time I enter in such a bloc, .__exception_name__
+   will always have the value 0, but when an exception will be raised,
+   I will firstly set .__exception_name__ to a not null value (the value
+   depends on the name of the exception), and then jump back into the
+   last try block that has been found by restoring the state
+   function. Like that, the conditionnal jump will be accepted and the
+   program will go in the catch statement.
 
 
-
+Variables used :
+   .__exception_name__
+   .__exception_value__
+   
+   .__rsp_before_call__
+   .__rip_before_call__
+   .last_try_rsp
+   .last_try_rip
 
 
 
 
 En pseudo code :
+
+Lancer une exception:
+   mettre à jour exception_name
+   changer exception_value
+   restaurer l'état dans .last_try_rsp puis .last_try_rip.
+
+
+On appelle état (sous entendu local) les variables
+.last_try_rsp et .last_try_rip
+et etat global les variables
+.__rsp_before_call__ et .__rip_before_call__
 
 Appel de fonction :
    etat --> global
@@ -43,8 +62,8 @@ Appel de fonction :
    global --> etat
 
 BLOC_1:
-   sauvegarder etat
    creer --retour_bool-- et --retour_val--
+   sauvegarder etat
    si exc = 0 alors BLOC_try
    sinon BLOC_exc
 
@@ -63,19 +82,52 @@ BLOC_exc:
 
 
 bloc_exc_n:
-   mettre global exc à 0
+   mettre .__exception_name__ à 0
    contenu
    bloc_finally
 
 bloc_finally:
    contenu du bloc
    si --retour_bool-- (vient de bloc_try) alors bloc_finally_return
-   si global exc non nul, alors relancer l'exception
+   si .__exception_name__ non nul, alors relancer l'exception via un bloc finally_exc
    sinon suite du bloc courant
 
+   
 bloc_finally_return:
    retourner --retour_val--
+
+
+======= TODO =======
+En pseudo code :
+
+On appelle état (sous entendu local) les variables
+.last_try_rsp et .last_try_rip
+et etat global les variables
+.__rsp_before_call__ et .__rip_before_call__
+
+BLOC_1:
+   sinon BLOC_exc
+
+BLOC_try:
+     val de retour si existe dans --retour_val--
+       PUIS (au cas ou exception relancée) mettre --retour_bool-- à 1
    
+BLOC_exc:
+   restaurer ancien etat dans global
+   si exn = 1 alors bloc_exc_1
+   si exn = 2 alors bloc_exc_2
+   si exn = 3 alors bloc_exc_3
+   sinon bloc_finally
+
+
+bloc_exc_n:
+   mettre .__exception_name__ à 0
+   contenu
+   bloc_finally
+
+A réfléchir :
+   Attention aux try imbriqués et aux return !!!
+   Modification rax possible ?
    *)
 
 (* If Ocaml version < 4.00 *)
@@ -354,6 +406,30 @@ class env my_map offset return_address =
       Str_map.mem key my_map
   end
 
+(* ================== *)
+(* === Exceptions === *)
+(* ================== *)
+(* Since exceptions are global for the whole program,
+   I need a structure that can assign an integer to
+   an exception if it has already been defined, and that
+   returns a new integer not already used else.
+*)
+module Str_int_map = Map.Make(String)
+class exc () =
+  object(this)
+    val mutable exc_counter = 0
+    val mutable exc_map = Str_int_map.empty
+    method get_map = exc_map
+    method int_of_name exc_name =
+      try
+        Str_int_map.find exc_name exc_map
+      with Not_found ->
+        (exc_counter <- exc_counter + 1;
+         exc_map <- Str_int_map.add exc_name exc_counter exc_map;
+         exc_counter)
+  end
+
+let glob_exc = new exc ()
 
 
 (* =============================== *)
@@ -806,6 +882,15 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
     end
   | CALL (f_name, loc_expr_l) -> (** appel de fonction f(e1,...,en) *)
     begin
+      (* Save the exception state *)
+      asm_bloc#add_content_d
+        [(sp "movq %s,%%r8" (env#gets ".last_try_rsp"),"Save the exc state before function call (rsp)");
+         (sp "movq %%r8,%s" (env#gets ".__rsp_before_call__"),"  Save rsp");
+         (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Save the exc state before function call (rip)");
+         (sp "movq %%r8,%s" (env#gets ".__rip_before_call__"),"  Save rip");
+        ]
+        [];
+      (* Get all the asm bloc of arguments *)
       let (end_env, rev_end_addr_list) =
         List.fold_left (fun (curr_env, addr_list) (locn, exprn) ->
             let (new_env, new_addr, _) = asm_block_of_expr func exprn curr_env func_env asm_bloc locn in
@@ -1188,6 +1273,17 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
                    (n_env,n_arg+1))
                 (env1,1)
                 first_args_s in
+            (* Get the exc state from the global values *)
+            let env2 = env2#add asm_bloc ".last_try_rsp" in
+            let env2 = env2#add asm_bloc ".last_try_rip" in
+            let tmp0 = (env2#get ".__rsp_before_call__") in
+            let tmp = string_of_address tmp0 in
+            asm_bloc#add_content_d
+              [(sp "movq %s,%%r8" tmp,"Get the exc parameters from the global variables");
+               (sp "movq %%r8,%s" (env2#gets ".last_try_rsp")," (rsp)");
+               (sp "movq %s,%%r8" (env2#gets ".__rip_before_call__"),"");
+               (sp "movq %%r8,%s" (env2#gets ".last_try_rip")," (rip)")]
+              [];
             (* Eval the inside of the function *)
             let (end_env,last_func_env) =
               asm_block_of_code func_name code env2 next_func_env new_asm_bloc
@@ -1349,6 +1445,111 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         [];
       (env,func_env)
     end
+  | CTHROW (exc_name, (loc,expr)) ->
+    begin
+      pr "CTHROW\n";
+      let (_, return_address,_) =
+        asm_block_of_expr func expr env func_env asm_bloc loc in
+      let exc_int = glob_exc#int_of_name exc_name in
+      (* Change the name *)
+      asm_bloc#add_content_d
+        [(sp "movq $%d,%s"
+            exc_int
+            (env#gets ".__exception_name__")
+         ,sp"Exception %s raised (nb : %d)" exc_name exc_int)]
+        [];
+      (* Change the value *)
+      asm_bloc#add_content_d
+        ( ("",sp "  Change the value of the exception %s" exc_name)
+          :: (mv_variable return_address (env#get ".__exception_value__")))
+        [];
+      (* Restore last try state *)
+      asm_bloc#add_content_d
+        [(sp "movq %s,%%rsp" (env#gets ".last_try_rsp"),"  Restore the last try state (rsp)");
+         (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Restore the last try state (rip) by putting it in r8");
+         (sp "jmp *%%r8" , "  Restore the last try state (rip)")]
+        [];
+      (env,func_env)
+    end
+  | CTRY ((loc,code), exc_lst, code_finally_opt) ->
+    begin
+      try
+        pr "CTRY\n";
+        (* Usefull for function call in the try bloc*)
+        let env_inside_try = env#add asm_bloc "--retour_bool--" in
+        let env_inside_try = env_inside_try#add asm_bloc "--retour_val--" in
+        (* Save the current state *)
+        let env_inside_try = env_inside_try#add asm_bloc ".last_try_rsp" in
+        let env_inside_try = env_inside_try#add asm_bloc ".last_try_rip" in
+        asm_bloc#add_content_d
+          [(sp "movq %%rsp, %s" (env_inside_try#gets ".last_try_rsp")
+           ,"  Save the current stack position (rsp)");
+           (sp "movq %%rsp, %s" (env_inside_try#gets ".last_try_rip")
+           ,"  Save the current instruction pointer (rip)")]
+          [];
+        (* Name of blocs *)
+        let asm_bloc_name_inside_try = (genlab func) ^ "_inside_try" in
+        let asm_bloc_name_finally = (genlab func) ^ "_finally" in
+        let asm_bloc_name_finally_return = (genlab func) ^ "_finally_return" in
+        let asm_bloc_name_finally_exc = (genlab func) ^ "_finally_exc" in
+        (* Build the bloc inside the try *)
+        let asm_bloc_inside_try =
+          new asm_block asm_bloc_name_inside_try
+            [("","Inside the try bloc...")]
+            [(sp "jmp %s" asm_bloc_name_finally," Jump in the finally bloc...")]
+            []
+        in
+        asm_bloc#add_block asm_bloc_inside_try;
+        let (_,_) = asm_block_of_code func code env_inside_try func_env asm_bloc_inside_try in
+        (* Build the bloc finally return *)
+        let asm_bloc_finally_return =
+          new asm_block asm_bloc_name_finally_return
+            [("","Inside the finally return bloc");
+             (sp "movq %s,%%rax" (env_inside_try#gets "--retour_val--"),"Save the return value in rax");
+             ("movq %rbp,%rsp","Remettre le pointeur de pile à l'endroit où il était lors de l'appel de la fonction");
+             ("popq %rbp","On remets le base pointer au début");
+             ("ret","On retourne à l'instruction assembleur sauvegardée par call")]
+            []
+            []
+        in
+        asm_bloc#add_block asm_bloc_finally_return;
+        (* Build the bloc finally exception (used if an exception is not catched) *)
+        let asm_bloc_finally_exc =
+          new asm_block asm_bloc_name_finally_exc
+            [("","Inside the finally exception bloc (when an exception is not catched)");
+             (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Restore the last try state (rip) by putting it in r8");
+             (sp "movq %s,%%rsp" (env#gets ".last_try_rsp"),"  Restore the last try state (rsp)");
+             (sp "jmp *%%r8" , "  Restore the last try state (rip)")]
+            []
+            []
+        in
+        asm_bloc#add_block asm_bloc_finally_exc;
+        (* Build the bloc finally *)
+        let (loc_finally, code_finally) = match code_finally_opt with
+            None -> (loc, CBLOCK ([], []))
+          | Some c -> c in 
+        let asm_bloc_finally =
+          new asm_block asm_bloc_name_finally
+            [("","Inside the finally bloc...")]
+            [
+              (* Test function return *)
+              (sp "movq %s,%%r8" (env_inside_try#gets "--retour_bool--"),"Jump in the finally return bloc if a return has been raised");
+              (sp "cmp $1,%%r8","");
+              (sp "je %s" asm_bloc_name_finally_return, "");
+              (* If .__exception_name__ is not null, raise again the exception *)
+              (sp "movq %s,%%r8" (env_inside_try#gets ".__exception_name__"),"Jump in the finally return bloc if a return has been raised");
+              ("cmpq $0,%r8","");
+              (sp "jg %s" asm_bloc_name_finally_exc ,"")
+            ]
+            []
+        in
+        (try
+           ignore(asm_block_of_code func code_finally env func_env asm_bloc_finally)
+         with Uncomplete_compilation_error er -> compile_raise loc_finally er);
+        ignore(asm_bloc#fork_block asm_bloc_finally);
+        (env,func_env)
+      with Uncomplete_compilation_error er -> compile_raise loc er
+    end
 
 (* Return env *)
 let add_global_var asm_bloc env (var_name,value) =
@@ -1359,9 +1560,9 @@ let add_global_var asm_bloc env (var_name,value) =
   asm_bloc#add_block_before var_asm;
   env#addf var_name (Global var_name)
 
-(* ================== *)
-(* === Add return === *)
-(* ================== *)
+(* ============================================= *)
+(* === Add return at the end of all function === *)
+(* ============================================= *)
 
 let add_return decl_list =
   List.map
@@ -1378,6 +1579,7 @@ let add_return decl_list =
 (* === Compilation === *)
 (* =================== *)
 let compile out decl_list =
+  pr "Début compilation\n%!";
   let env = new env Str_map.empty (-1) (Local_bp 0) in
   let asm_bloc =  new asm_block ".EVERYTHING" [] [] [] in
   asm_bloc#set_before_anything [(".global main", "Usefull to make main available for everyone")];
@@ -1389,8 +1591,11 @@ let compile out decl_list =
           Since these symbols are forbidden in real variable name there
           won't be any conflict.
        *)
-       ("==last_rip==",0)
-       ("==last_==",0)
+       (".__rsp_before_call__",0);
+       (".__rip_before_call__",0);
+       (* These global variables are used to store the current exception *)
+       (".__exception_name__",0);
+       (".__exception_value__",0);
       ]
   in
   let decl_list2 = add_return decl_list in
