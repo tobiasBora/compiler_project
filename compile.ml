@@ -390,7 +390,7 @@ class env my_map offset return_address =
       let new_address_s = string_of_address new_address in
       asm_block#add_content_d
         [(sp "movq $0, %s" new_address_s ,sp "On mets 0 par défaut dans la variable \"%s\"" var_name);
-         (sp "leaq %s, %%rsp" new_address_s, "On bouge le stack pointer pour être sûr de ne pas écraser la variable \"%s\" par la suite")]
+         (sp "leaq %s, %%rsp" new_address_s, sp "On bouge le stack pointer pour être sûr de ne pas écraser la variable \"%s\" par la suite" var_name)]
         (* XXX OK, mais... pourquoi pas un simple addq/subq sur %rsp ? *)
         (* (asm_push_empty var_name current_offset) *)
         (* []; *)
@@ -786,7 +786,7 @@ let asm_condition_part1 func asm_bloc src dest_asm1 dest_asm2 =
 let asm_while_part1 cond_asm_bloc return_addr main_asm_name after_asm_name =
   let return_s = string_of_address return_addr in
   cond_asm_bloc#add_content_d
-    [(sp "cmp $0,%s" return_s," (Compare the condition with 0)")]
+    [(sp "cmpq $0,%s" return_s," (Compare the condition with 0)")]
     []
 
 
@@ -1280,11 +1280,11 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
                 (env1,1)
                 first_args_s in
             (* Get the exc state from the global values *)
-            let env2 = env2#add asm_bloc ".last_try_rsp" in
-            let env2 = env2#add asm_bloc ".last_try_rip" in
+            let env2 = env2#add new_asm_bloc ".last_try_rsp" in
+            let env2 = env2#add new_asm_bloc ".last_try_rip" in
             let tmp0 = (env2#get ".__rsp_before_call__") in
             let tmp = string_of_address tmp0 in
-            asm_bloc#add_content_d
+            new_asm_bloc#add_content_d
               [(sp "movq %s,%%r8" tmp,"Get the exc parameters from the global variables");
                (sp "movq %%r8,%s" (env2#gets ".last_try_rsp")," (rsp)");
                (sp "movq %s,%%r8" (env2#gets ".__rip_before_call__"),"");
@@ -1446,7 +1446,9 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
             [];
         end);
       asm_bloc#add_content_d
-        [("movq %rbp,%rsp","Remettre le pointeur de pile à l'endroit où il était lors de l'appel de la fonction");
+        [(sp "movq $0,%s" (env#gets ".__exception_name__")
+         ,"Put back a 0 before returning");
+         ("movq %rbp,%rsp","Remettre le pointeur de pile à l'endroit où il était lors de l'appel de la fonction");
          ("popq %rbp","On remets le base pointer au début");
          ("ret","On retourne à l'instruction assembleur sauvegardée par call")]
         [];
@@ -1512,7 +1514,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         (* Add an exception *)
         List.iter
           (fun (name_exc, var_exc, (loc_exc,code_exc)) ->
-             let asm_bloc_name_curr_exc = sp "%s_exc" (genlab func) in
+             let asm_bloc_name_curr_exc = sp "%s_catch_exc" (genlab func) in
              let n_exc = glob_exc#int_of_name name_exc in
              (* Jump in the good bloc *)
              asm_bloc#add_content_d
@@ -1524,7 +1526,9 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
              (* Create this bloc *)
              let asm_bloc_curr_exc =
                new asm_block asm_bloc_name_curr_exc
-                 [("",sp "Asm bloc for exception %s" name_exc)]
+                 [("",sp "Asm bloc for exception %s" name_exc);
+                  (sp "movq $0,%s" (env#gets ".__exception_name__")
+                  ,"Réinitialiser à 0 .__exception_name__")]
                  [(sp "jmp %s" asm_bloc_name_finally, "Jump back in finally")]
                  [] in
              (* Save the variable *)
@@ -1569,7 +1573,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         (* Build the bloc finally exception (used if an exception is not catched) *)
         let asm_bloc_finally_exc =
           new asm_block asm_bloc_name_finally_exc
-            [("","Inside the finally exception bloc (when an exception is not catched)");
+            [("","Inside the finally exception bloc (when an exception is not catched, we send it again)");
              (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Restore the last try state (rip) by putting it in r8");
              (sp "movq %s,%%rsp" (env#gets ".last_try_rsp"),"  Restore the last try state (rsp)");
              (sp "jmp *%%r8" , "  Restore the last try state (rip)")]
@@ -1584,21 +1588,26 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         let asm_bloc_finally =
           new asm_block asm_bloc_name_finally
             [("","Inside the finally bloc...")]
-            [
-              (* Test function return *)
-              (sp "movq %s,%%r8" (env_inside_try#gets "--retour_bool--"),"Jump in the finally return bloc if a return has been raised");
-              (sp "cmp $1,%%r8","");
-              (sp "je %s" asm_bloc_name_finally_return, "");
-              (* If .__exception_name__ is not null, raise again the exception *)
-              (sp "movq %s,%%r8" (env_inside_try#gets ".__exception_name__"),"Jump in the finally return bloc if a return has been raised");
-              ("cmpq $0,%r8","");
-              (sp "jg %s" asm_bloc_name_finally_exc ,"")
-            ]
+            []
             []
         in
-        (try
+        (try 
            ignore(asm_block_of_code func code_finally env func_env asm_bloc_finally)
          with Uncomplete_compilation_error er -> compile_raise loc_finally er);
+        asm_bloc_finally#add_content_d
+          [(* Test function return *)
+            (sp "movq %s,%%r8" (env_inside_try#gets "--retour_bool--"),"Jump in the finally return bloc if a return has been raised");
+            (sp "cmp $1,%%r8","");
+            (sp "je %s" asm_bloc_name_finally_return, "");
+            (* If .__exception_name__ is not null, raise again the exception *)
+            (sp "movq %s,%%r8" (env_inside_try#gets ".__exception_name__"),"Jump in the finally return bloc if a return has been raised");
+            ("cmpq $0,%r8","");
+            (sp "jg %s" asm_bloc_name_finally_exc ,"")]
+          [];
+        (* asm_bloc_finally#add_content_d *)
+        (*   [ (sp "movq $0,%s" (env#gets ".__exception_name__") *)
+        (*     ,"Réinitialiser à 0 .__exception_name__")] *)
+        (*   []; *)
         ignore(asm_bloc#fork_block asm_bloc_finally);
         (env,func_env)
       with Uncomplete_compilation_error er -> compile_raise loc er
@@ -1628,6 +1637,60 @@ let add_return decl_list =
                                  (next_loc, CRETURN None)]))))
     decl_list
 
+let rec replace_return_with_exc var_decl0 =
+  let m = List.map in
+  let rec replace_in_code (loc0,code0) =
+    begin
+      match code0 with
+        CBLOCK (var_decl_l, loc_code_l) ->
+        (loc0,
+         CBLOCK (m replace_return_with_exc var_decl_l
+                ,m replace_in_code loc_code_l))
+      | CEXPR _ -> (loc0, code0)
+      | CIF (loc_expr,loc_code1,loc_code2) ->
+        (loc0
+        ,CIF ( loc_expr
+             , replace_in_code loc_code1
+             , replace_in_code loc_code2))
+      | CWHILE (loc_expr,loc_code) ->
+        ( loc0
+        , CWHILE ( loc_expr
+                 , replace_in_code loc_code))
+      | CRETURN (loc_expr_opt) ->
+        begin
+          match loc_expr_opt with
+            None -> (loc0, CTHROW (".return", (loc0,CST 1)))
+          | Some (loc,expr) -> (loc0, CTHROW (".return", (loc0,expr)))
+        end
+      | CTHROW _ -> (loc0, code0)
+      | CTRY (loc_code, name_var_code_l, loc_code_opt) ->
+        begin
+          ( loc0
+          , CTRY (replace_in_code loc_code
+                 , m (fun (name,var,loc_code) -> (name,var,replace_in_code loc_code))
+                     name_var_code_l
+                 , match loc_code_opt with
+                   None -> None
+                 | Some loc_code -> Some (replace_in_code loc_code)))
+        end        
+    end
+  in
+  let rec replace_in_var_decl var_decl = match var_decl with
+      CDECL (_,_) -> var_decl
+    | CFUN (loc0,s,var_decl_l_1,(loc1,code1)) ->
+      begin
+        CFUN (loc0
+             ,s
+             ,m replace_in_var_decl var_decl_l_1
+             ,(loc1
+              , CTRY ( replace_in_code (loc1,code1)
+                     , [(".return", ".return_val", (loc1,CRETURN (Some (loc1,VAR ".return_val"))))]
+                     , None)))
+      end
+  in
+  replace_in_var_decl var_decl0
+
+
 (* =================== *)
 (* === Compilation === *)
 (* =================== *)
@@ -1652,9 +1715,10 @@ let compile out decl_list =
       ]
   in
   let decl_list2 = add_return decl_list in
+  let decl_list3 = List.map replace_return_with_exc decl_list2 in
   (* Main run *)
   try
-    ignore(asm_block_of_code "" (CBLOCK (decl_list2, [])) env2 env asm_bloc);
+    ignore(asm_block_of_code "" (CBLOCK (decl_list3, [])) env2 env asm_bloc);
     Printf.fprintf out "%s" asm_bloc#get_content_string;
     pr "\027[1;32mThe compilation in asm ended with success\027[0;m\n%!"
   with Compilation_error str -> (pr "\027[1;31mError\027[0;m : %s\n%!" str; exit 1)
