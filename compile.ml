@@ -5,14 +5,14 @@ open Genlab
 
 (*
 === Notation and definition ===
-   In my code, the variables whose name is ==my_variable_name== are global,
+   In my code, the variables whose name is .__my_variable_name__ are global,
    but not accessible for the user (a 'real' variable name cannot begin with
    an equal sign). In the same idea, the variables that have the name
-   --my_variable_name-- are local variable name.
+   .my_variable_name are local variable name.
 
    I will call "state" of a program the value of the registers
    rsp (stack pointer) and rip (instruction pointer). I save it in local
-   variable (notation with --) and global variable (notation with ==) in
+   variable (notation with .) and global variable (notation with .__) in
    order to be able to give them to functions.
    
 === Deal with exceptions ===
@@ -30,6 +30,18 @@ open Genlab
    function. Like that, the conditionnal jump will be accepted and the
    program will go in the catch statement.
 
+=== Deal with return ===
+   The return instruction cannot behave as usual since the finally must be
+   read. The idea is to consider return has an exception with the value
+   1. Since it is never catched, the behaviour respects the semantic.
+   You just need to put at the beginning of the function of try a little
+   bit specific that matchs the return :
+   try
+   {
+      ... inside of function ...
+   }
+   catch(.return n) { return n }
+   with return a "real" return here.
 
 Variables used :
    .__exception_name__
@@ -65,24 +77,18 @@ BLOC_1:
    creer --retour_bool-- et --retour_val--
    sauvegarder etat
    si exc = 0 alors BLOC_try
-   sinon BLOC_exc
+   si exn = 1 alors bloc_exc_1
+   si exn = 2 alors bloc_exc_2
+   si exn = 3 alors bloc_exc_3
+   sinon bloc_finally avec ancien état
 
 BLOC_try:
    bloc_classique
      val de retour si existe dans --retour_val--
        PUIS (au cas ou exception relancée) mettre --retour_bool-- à 1
    bloc_finally
-   
-BLOC_exc:
-   restaurer ancien etat dans global
-   si exn = 1 alors bloc_exc_1
-   si exn = 2 alors bloc_exc_2
-   si exn = 3 alors bloc_exc_3
-   sinon bloc_finally
-
 
 bloc_exc_n:
-   mettre .__exception_name__ à 0
    contenu
    bloc_finally
 
@@ -121,7 +127,6 @@ BLOC_exc:
 
 
 bloc_exc_n:
-   mettre .__exception_name__ à 0
    contenu
    bloc_finally
 
@@ -428,8 +433,9 @@ class exc () =
          exc_map <- Str_int_map.add exc_name exc_counter exc_map;
          exc_counter)
   end
-
+(* 0 = nothing, 1 = return, 2,3... = others exceptions *)
 let glob_exc = new exc ()
+let _ = glob_exc#int_of_name ".return"
 
 
 (* =============================== *)
@@ -1309,13 +1315,14 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
             (env3, func_env3)
           ) (env, func_env) var_decl_l in
       (* We run the loc_code_l *)
-      List.fold_left (fun (env6,func_env6) (loc,code) ->
+      ignore(List.fold_left (fun (env6,func_env6) (loc,code) ->
           try
             asm_block_of_code func code env6 func_env6 asm_bloc
           with Uncomplete_compilation_error er -> compile_raise loc er
         )
         (env4, func_env4)
-        loc_code_l
+        loc_code_l);
+      (env,func_env)
     end
   | CEXPR (loc,expr) ->
     begin
@@ -1447,7 +1454,6 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
     end
   | CTHROW (exc_name, (loc,expr)) ->
     begin
-      pr "CTHROW\n";
       let (_, return_address,_) =
         asm_block_of_expr func expr env func_env asm_bloc loc in
       let exc_int = glob_exc#int_of_name exc_name in
@@ -1474,24 +1480,71 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
   | CTRY ((loc,code), exc_lst, code_finally_opt) ->
     begin
       try
-        pr "CTRY\n";
+        (* Name of blocs *)
+        let asm_bloc_save_trick = (genlab func) ^ "_save_trick" in
+        let asm_bloc_name_inside_try = (genlab func) ^ "_inside_try" in
+        let asm_bloc_name_finally = (genlab func) ^ "_finally" in
+        let asm_bloc_name_finally_return = (genlab func) ^ "_finally_return" in
+        let asm_bloc_name_finally_exc = (genlab func) ^ "_finally_exc" in
         (* Usefull for function call in the try bloc*)
         let env_inside_try = env#add asm_bloc "--retour_bool--" in
         let env_inside_try = env_inside_try#add asm_bloc "--retour_val--" in
-        (* Save the current state *)
+        (* Save the current state. Since it's not possible to easily
+           get %rip, I create a label, call it and pop the value after *)
         let env_inside_try = env_inside_try#add asm_bloc ".last_try_rsp" in
         let env_inside_try = env_inside_try#add asm_bloc ".last_try_rip" in
         asm_bloc#add_content_d
           [(sp "movq %%rsp, %s" (env_inside_try#gets ".last_try_rsp")
            ,"  Save the current stack position (rsp)");
-           (sp "movq %%rsp, %s" (env_inside_try#gets ".last_try_rip")
-           ,"  Save the current instruction pointer (rip)")]
+           (sp "call %s" asm_bloc_save_trick,"  Trick to get %rip")]
           [];
-        (* Name of blocs *)
-        let asm_bloc_name_inside_try = (genlab func) ^ "_inside_try" in
-        let asm_bloc_name_finally = (genlab func) ^ "_finally" in
-        let asm_bloc_name_finally_return = (genlab func) ^ "_finally_return" in
-        let asm_bloc_name_finally_exc = (genlab func) ^ "_finally_exc" in
+        let asm_bloc_after_save =
+          new asm_block asm_bloc_save_trick
+            [("pop %r8","  Save the current instruction pointer (rip)");
+             (sp "movq %%r8, %s" (env_inside_try#gets ".last_try_rip"),"  (rip)");
+             (sp "movq %s,%%r8" (env#gets ".__exception_name__"),"Check of the value of the exception");
+             ("cmp $0,%r8","");
+             (sp "je %s" asm_bloc_name_inside_try, "Come back in the good place")]
+            []
+            []
+        in
+        ignore(asm_bloc#fork_block asm_bloc_after_save);
+        (* Add an exception *)
+        List.iter
+          (fun (name_exc, var_exc, (loc_exc,code_exc)) ->
+             let asm_bloc_name_curr_exc = sp "%s_exc" (genlab func) in
+             let n_exc = glob_exc#int_of_name name_exc in
+             (* Jump in the good bloc *)
+             asm_bloc#add_content_d
+               [
+                 (sp "cmp $%d,%%r8" n_exc, sp " (exc %s)" name_exc);
+                 (sp "je %s" asm_bloc_name_curr_exc, "")
+               ]
+               [];
+             (* Create this bloc *)
+             let asm_bloc_curr_exc =
+               new asm_block asm_bloc_name_curr_exc
+                 [("",sp "Asm bloc for exception %s" name_exc)]
+                 [(sp "jmp %s" asm_bloc_name_finally, "Jump back in finally")]
+                 [] in
+             (* Save the variable *)
+             let env' = env#add asm_bloc_curr_exc var_exc in
+             asm_bloc_curr_exc#add_content_d
+               [(sp "movq %s,%%r8" (env'#gets ".__exception_value__"),"Save the value of the exc in the variable");
+                (sp "movq %%r8, %s" (env'#gets var_exc), "")]
+               [];
+             (* Write the code for the exc *)
+             (try
+                ignore(asm_block_of_code func code_exc env' func_env asm_bloc_curr_exc)
+              with Uncomplete_compilation_error er -> compile_raise loc_exc er);
+             (* Add the bloc to asm_bloc *)
+             asm_bloc#add_block asm_bloc_curr_exc;
+             ()
+          )
+          exc_lst;
+        asm_bloc#add_content_d
+          [(sp "jmp %s" asm_bloc_name_finally, "Jump back in finally (last choice)")]
+          [];
         (* Build the bloc inside the try *)
         let asm_bloc_inside_try =
           new asm_block asm_bloc_name_inside_try
@@ -1505,7 +1558,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         let asm_bloc_finally_return =
           new asm_block asm_bloc_name_finally_return
             [("","Inside the finally return bloc");
-             (sp "movq %s,%%rax" (env_inside_try#gets "--retour_val--"),"Save the return value in rax");
+             (sp "movq %s,%%rax" (env_inside_try#gets "--retour_val--"),"Save the returned value in rax");
              ("movq %rbp,%rsp","Remettre le pointeur de pile à l'endroit où il était lors de l'appel de la fonction");
              ("popq %rbp","On remets le base pointer au début");
              ("ret","On retourne à l'instruction assembleur sauvegardée par call")]
