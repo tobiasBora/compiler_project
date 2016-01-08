@@ -47,8 +47,10 @@ Variables used :
    .__exception_name__
    .__exception_value__
    
+   .__rbp_before_call__
    .__rsp_before_call__
    .__rip_before_call__
+   .last_try_rbp
    .last_try_rsp
    .last_try_rip
 
@@ -60,13 +62,13 @@ En pseudo code :
 Lancer une exception:
    mettre à jour exception_name
    changer exception_value
-   restaurer l'état dans .last_try_rsp puis .last_try_rip.
+   restaurer l'état dans .last_try_rsp, .last_try_rbp puis .last_try_rip.
 
 
 On appelle état (sous entendu local) les variables
-.last_try_rsp et .last_try_rip
+.last_try_rbp, .last_try_rsp et .last_try_rip
 et etat global les variables
-.__rsp_before_call__ et .__rip_before_call__
+.__rbp_before_call__, .__rsp_before_call__ et .__rip_before_call__
 
 Appel de fonction :
    etat --> global
@@ -107,9 +109,9 @@ bloc_finally_return:
 En pseudo code :
 
 On appelle état (sous entendu local) les variables
-.last_try_rsp et .last_try_rip
+.last_try_rbp, .last_try_rsp et .last_try_rip
 et etat global les variables
-.__rsp_before_call__ et .__rip_before_call__
+.__rbp_before_call__, .__rsp_before_call__ et .__rip_before_call__
 
 BLOC_1:
    sinon BLOC_exc
@@ -890,7 +892,9 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
     begin
       (* Save the exception state *)
       asm_bloc#add_content_d
-        [(sp "movq %s,%%r8" (env#gets ".last_try_rsp"),"Save the exc state before function call (rsp)");
+        [(sp "movq %s,%%r8" (env#gets ".last_try_rbp"),"Save the exc state before function call (rbp)");
+         (sp "movq %%r8,%s" (env#gets ".__rbp_before_call__"),"  Save rbp");
+         (sp "movq %s,%%r8" (env#gets ".last_try_rsp"),"Save the exc state before function call (rsp)");
          (sp "movq %%r8,%s" (env#gets ".__rsp_before_call__"),"  Save rsp");
          (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Save the exc state before function call (rip)");
          (sp "movq %%r8,%s" (env#gets ".__rip_before_call__"),"  Save rip");
@@ -1280,12 +1284,13 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
                 (env1,1)
                 first_args_s in
             (* Get the exc state from the global values *)
+            let env2 = env2#add new_asm_bloc ".last_try_rbp" in
             let env2 = env2#add new_asm_bloc ".last_try_rsp" in
             let env2 = env2#add new_asm_bloc ".last_try_rip" in
-            let tmp0 = (env2#get ".__rsp_before_call__") in
-            let tmp = string_of_address tmp0 in
             new_asm_bloc#add_content_d
-              [(sp "movq %s,%%r8" tmp,"Get the exc parameters from the global variables");
+              [(sp "movq %s,%%r8" (env2#gets ".__rbp_before_call__"),"Get the exc parameters from the global variables");
+               (sp "movq %%r8,%s" (env2#gets ".last_try_rbp")," (rbp)");
+               (sp "movq %s,%%r8" (env2#gets ".__rsp_before_call__"),"Get the exc parameters from the global variables");
                (sp "movq %%r8,%s" (env2#gets ".last_try_rsp")," (rsp)");
                (sp "movq %s,%%r8" (env2#gets ".__rip_before_call__"),"");
                (sp "movq %%r8,%s" (env2#gets ".last_try_rip")," (rip)")]
@@ -1475,6 +1480,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
       asm_bloc#add_content_d
         [(sp "movq %s,%%rsp" (env#gets ".last_try_rsp"),"  Restore the last try state (rsp)");
          (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Restore the last try state (rip) by putting it in r8");
+         (sp "movq %s,%%rbp" (env#gets ".last_try_rbp"),"  Restore the last try state (rbp)");
          (sp "jmp *%%r8" , "  Restore the last try state (rip)")]
         [];
       (env,func_env)
@@ -1493,10 +1499,13 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
         let env_inside_try = env_inside_try#add asm_bloc "--retour_val--" in
         (* Save the current state. Since it's not possible to easily
            get %rip, I create a label, call it and pop the value after *)
+        let env_inside_try = env_inside_try#add asm_bloc ".last_try_rbp" in
         let env_inside_try = env_inside_try#add asm_bloc ".last_try_rsp" in
         let env_inside_try = env_inside_try#add asm_bloc ".last_try_rip" in
         asm_bloc#add_content_d
-          [(sp "movq %%rsp, %s" (env_inside_try#gets ".last_try_rsp")
+          [(sp "movq %%rbp, %s" (env_inside_try#gets ".last_try_rbp")
+           ,"  Save the current stack position (rbp)");
+           (sp "movq %%rsp, %s" (env_inside_try#gets ".last_try_rsp")
            ,"  Save the current stack position (rsp)");
            (sp "call %s" asm_bloc_save_trick,"  Trick to get %rip")]
           [];
@@ -1576,6 +1585,7 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
             [("","Inside the finally exception bloc (when an exception is not catched, we send it again)");
              (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Restore the last try state (rip) by putting it in r8");
              (sp "movq %s,%%rsp" (env#gets ".last_try_rsp"),"  Restore the last try state (rsp)");
+             (sp "movq %s,%%rbp" (env#gets ".last_try_rbp"),"  Restore the last try state (rbp)");
              (sp "jmp *%%r8" , "  Restore the last try state (rip)")]
             []
             []
@@ -1707,6 +1717,7 @@ let compile out decl_list =
           Since these symbols are forbidden in real variable name there
           won't be any conflict.
        *)
+       (".__rbp_before_call__",0);
        (".__rsp_before_call__",0);
        (".__rip_before_call__",0);
        (* These global variables are used to store the current exception *)
