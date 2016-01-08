@@ -903,7 +903,8 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
          (sp "movq %s,%%r8" (env#gets ".__exception_name__"),"  Save the current exc name");
          (sp "movq %%r8,%s" (env#gets ".old_exception_name"),"  Save the current exc name");
          (sp "movq %s,%%r8" (env#gets ".__exception_value__"),"  Save the current exc value");
-         (sp "movq %%r8,%s" (env#gets ".old_exception_value"),"  Save the current exc value")
+         (sp "movq %%r8,%s" (env#gets ".old_exception_value"),"  Save the current exc value");
+         (sp "movq $0,%s" (env#gets ".__exception_name__"),"  Remove the exception in order to avoid bug in the call.")
         ]
         [];
       (* Get all the asm bloc of arguments *)
