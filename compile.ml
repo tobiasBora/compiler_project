@@ -890,6 +890,8 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
     end
   | CALL (f_name, loc_expr_l) -> (** appel de fonction f(e1,...,en) *)
     begin
+      let env = env#add asm_bloc ".old_exception_name" in
+      let env = env#add asm_bloc ".old_exception_value" in
       (* Save the exception state *)
       asm_bloc#add_content_d
         [(sp "movq %s,%%r8" (env#gets ".last_try_rbp"),"Save the exc state before function call (rbp)");
@@ -898,6 +900,10 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
          (sp "movq %%r8,%s" (env#gets ".__rsp_before_call__"),"  Save rsp");
          (sp "movq %s,%%r8" (env#gets ".last_try_rip"),"  Save the exc state before function call (rip)");
          (sp "movq %%r8,%s" (env#gets ".__rip_before_call__"),"  Save rip");
+         (sp "movq %s,%%r8" (env#gets ".__exception_name__"),"  Save the current exc name");
+         (sp "movq %%r8,%s" (env#gets ".old_exception_name"),"  Save the current exc name");
+         (sp "movq %s,%%r8" (env#gets ".__exception_value__"),"  Save the current exc value");
+         (sp "movq %%r8,%s" (env#gets ".old_exception_value"),"  Save the current exc value")
         ]
         [];
       (* Get all the asm bloc of arguments *)
@@ -967,6 +973,15 @@ let rec asm_block_of_expr func expr env func_env asm_bloc last_loc : (env * addr
       let dst = after_call_env#get "" in
       asm_bloc#add_content_d
         (asm_call_save_result (List.mem f_name ["malloc"; "realloc"; "calloc"] || func_env#mem f_name) dst)
+        [];
+      (* Restore the old exception name/value *)
+      asm_bloc#add_content_d
+        [
+          (sp "movq %s,%%r8" (env#gets ".old_exception_name"),"  Restore the current exc name");
+          (sp "movq %%r8,%s" (env#gets ".__exception_name__"),"  Restore the current exc name");
+          (sp "movq %s,%%r8" (env#gets ".old_exception_value"),"  Restore the current exc value");
+          (sp "movq %%r8,%s" (env#gets ".__exception_value__"),"  Restore the current exc value")
+        ]
         [];
       (after_call_env, dst, None)
     end
@@ -1451,8 +1466,9 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
             [];
         end);
       asm_bloc#add_content_d
-        [(sp "movq $0,%s" (env#gets ".__exception_name__")
-         ,"Put back a 0 before returning");
+        [
+          (* (sp "movq $0,%s" (env#gets ".__exception_name__") *)
+          (* ,"Put back a 0 before returning"); *)
          ("movq %rbp,%rsp","Remettre le pointeur de pile à l'endroit où il était lors de l'appel de la fonction");
          ("popq %rbp","On remets le base pointer au début");
          ("ret","On retourne à l'instruction assembleur sauvegardée par call")]
@@ -1534,10 +1550,11 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
                [];
              (* Create this bloc *)
              let asm_bloc_curr_exc =
+               (*  *)
                new asm_block asm_bloc_name_curr_exc
                  [("",sp "Asm bloc for exception %s" name_exc);
                   (sp "movq $0,%s" (env#gets ".__exception_name__")
-                  ,"Réinitialiser à 0 .__exception_name__")]
+                  ,"Réinitialiser à son ancienne valeur .__exception_name__")]
                  [(sp "jmp %s" asm_bloc_name_finally, "Jump back in finally")]
                  [] in
              (* Save the variable *)
@@ -1614,10 +1631,6 @@ let rec asm_block_of_code func (code : code) env func_env asm_bloc =
             ("cmpq $0,%r8","");
             (sp "jg %s" asm_bloc_name_finally_exc ,"")]
           [];
-        (* asm_bloc_finally#add_content_d *)
-        (*   [ (sp "movq $0,%s" (env#gets ".__exception_name__") *)
-        (*     ,"Réinitialiser à 0 .__exception_name__")] *)
-        (*   []; *)
         ignore(asm_bloc#fork_block asm_bloc_finally);
         (env,func_env)
       with Uncomplete_compilation_error er -> compile_raise loc er
